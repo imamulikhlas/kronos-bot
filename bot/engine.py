@@ -132,8 +132,8 @@ class Engine:
         fill = self.broker.buy(sym, size)
         sl, tp = exit_levels(fill.price, sig, self.s)
         self.store.add_position(sym, fill, candle_ts, reason, sl, tp)
-        msg = (f"BELI {sym}: {fill.amount:.8g} @ {fill.price:,.6g} (modal {fill.cost:.2f}) | "
-               f"SL {sl:,.6g} TP {tp:,.6g} — {reason}")
+        msg = (f"Beli {sym} senilai {fill.cost:.2f} di harga {fill.price:,.6g}. "
+               f"Stop-loss {sl:,.6g}, target {tp:,.6g}. Alasan: {reason}.")
         log.info("✅ %s", msg)
         self.store.event("TRADE", msg)
 
@@ -142,8 +142,8 @@ class Engine:
         pnl = self.store.close_position(pos["id"], fill, reason)
         ts = candle_ts if candle_ts is not None else (self.ex.milliseconds() // self.tfms) * self.tfms
         self.store.set_kv(f"last_exit_ts:{self.store.mode}:{pos['symbol']}", int(ts))
-        msg = (f"JUAL {pos['symbol']}: {fill.amount:.8g} @ {fill.price:,.6g} | PnL {pnl:+.2f} "
-               f"({pnl / pos['cost'] * 100:+.2f}%) — {reason}")
+        msg = (f"Jual {pos['symbol']} di harga {fill.price:,.6g}, {'untung' if pnl >= 0 else 'rugi'} "
+               f"{abs(pnl):.2f} ({pnl / pos['cost'] * 100:+.2f}%). Alasan: {reason}.")
         log.info("%s %s", "🟢" if pnl >= 0 else "🔴", msg)
         self.store.event("TRADE", msg)
 

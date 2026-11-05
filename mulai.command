@@ -14,8 +14,13 @@ if [ ! -f .venv/setup_ok ]; then
   pip install -r requirements.txt || { echo "Gagal memasang library. Cek internet lalu jalankan lagi."; read -r; exit 1; }
   python setup_kronos.py || { echo "Gagal mengunduh Kronos. Cek internet lalu jalankan lagi."; read -r; exit 1; }
   [ -f .env ] || cp .env.example .env
+  cp requirements.txt .venv/req_installed.txt
   echo ok > .venv/setup_ok
 fi
 source .venv/bin/activate
+if ! cmp -s requirements.txt .venv/req_installed.txt; then
+  echo "Memperbarui library untuk versi baru..."
+  pip install -r requirements.txt && cp requirements.txt .venv/req_installed.txt
+fi
 echo "Panel Kontrol terbuka di browser: http://localhost:8501  (biarkan jendela ini terbuka)"
-streamlit run app.py --server.headless false --browser.gatherUsageStats false
+python server.py

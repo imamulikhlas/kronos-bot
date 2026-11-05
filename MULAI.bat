@@ -15,15 +15,17 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt || (echo. & echo Gagal memasang library. Cek internet lalu klik MULAI lagi. & pause & exit /b 1)
 python setup_kronos.py || (echo. & echo Gagal mengunduh Kronos. Cek internet lalu klik MULAI lagi. & pause & exit /b 1)
 if not exist .env copy .env.example .env >nul
+copy /y requirements.txt .venv\req_installed.txt >nul
 echo ok> .venv\setup_ok
 echo Persiapan selesai.
 
 :run
 call .venv\Scripts\activate.bat
+fc /b requirements.txt .venv\req_installed.txt >nul 2>nul || (echo Memperbarui library untuk versi baru... & pip install -r requirements.txt && copy /y requirements.txt .venv\req_installed.txt >nul)
 echo.
 echo ==========================================================
 echo   Panel Kontrol terbuka di browser: http://localhost:8501
 echo   Biarkan jendela ini terbuka selama memakai panel.
 echo ==========================================================
-streamlit run app.py --server.headless false --browser.gatherUsageStats false
+python server.py
 pause
