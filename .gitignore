@@ -1,0 +1,7 @@
+.env
+.venv/
+Kronos/
+data/
+logs/
+__pycache__/
+STOP

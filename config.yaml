@@ -1,0 +1,38 @@
+# Diatur dari Panel Kontrol. Boleh juga diedit manual.
+mode: paper
+exchange: tokocrypto
+quote: USDT
+symbols:
+- BTC/USDT
+- ETH/USDT
+timeframe: 1h
+model:
+  name: NeoQuasar/Kronos-small
+  tokenizer: NeoQuasar/Kronos-Tokenizer-base
+  device: auto
+  lookback: 400
+  pred_len: 12
+  n_paths: 10
+  temperature: 1.0
+  top_p: 0.9
+strategy:
+  fee_pct: 0.1
+  min_expected_return_pct: 0.8
+  min_prob_up: 0.65
+  stop_loss_pct: 2.0
+  take_profit_pct: 4.0
+  max_hold_candles: 24
+  exit_prob_up_below: 0.35
+  cooldown_candles: 2
+risk:
+  order_size_quote: 15.0
+  max_order_size_quote: 50.0
+  max_open_positions: 2
+  max_daily_loss_quote: 10.0
+paper:
+  starting_balance: 100.0
+  slippage_pct: 0.05
+loop:
+  price_check_sec: 60
+  delay_after_close_sec: 15
+db_path: data/trader.db
