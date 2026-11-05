@@ -97,11 +97,13 @@ def backtest_running() -> bool:
     return _alive(BT_PID, "backtest.py")
 
 
-def start_backtest(symbol: str, tf: str, candles: int, every: int):
+def start_backtest(symbol: str, tf: str, candles: int, every: int, optimize: bool = False):
     if backtest_running():
         return
-    _spawn(["backtest.py", symbol, "--tf", tf, "--candles", str(candles), "--every", str(every)],
-           BT_PID, BT_LOG, append=False)
+    args = ["backtest.py", symbol, "--tf", tf, "--candles", str(candles), "--every", str(every)]
+    if optimize:
+        args.append("--optimasi")
+    _spawn(args, BT_PID, BT_LOG, append=False)
 
 
 def stop_backtest():

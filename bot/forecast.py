@@ -23,11 +23,29 @@ class Signal:
     prob_up: float            # porsi skenario yang berakhir di atas harga + biaya
     pred_high: float          # median harga tertinggi yang diramal
     pred_low: float           # median harga terendah yang diramal
-    path: list = field(default_factory=list)   # median jalur close ke depan
+    path: list = field(default_factory=list)      # median jalur close ke depan
+    path_lo: list = field(default_factory=list)   # skenario buruk (persentil 10)
+    path_hi: list = field(default_factory=list)   # skenario baik (persentil 90)
+    trend_up: bool = True     # harga di atas EMA tren dan EMA menanjak
+    rsi: float = 50.0
+    atr_pct: float = 0.0      # volatilitas rata-rata per candle (%)
+    upside_pct: float = 0.0   # potensi naik (median harga tertinggi)
+    downside_pct: float = 0.0  # potensi turun (median harga terendah)
+    rr: float = 0.0           # rasio potensi naik : potensi turun
+    score: float = 0.0        # kekuatan sinyal = ekspektasi x peluang naik
+
+    @property
+    def direction(self) -> str:
+        if self.exp_ret_pct > 0.3 and self.prob_up >= 0.55:
+            return "NAIK"
+        if self.exp_ret_pct < -0.3 and self.prob_up <= 0.45:
+            return "TURUN"
+        return "SAMPING"
 
     def summary(self) -> str:
-        return (f"{self.symbol} close={self.last_close:,.6g} | ekspektasi {self.exp_ret_pct:+.2f}% "
-                f"| peluang naik {self.prob_up:.0%} | range {self.pred_low:,.6g}–{self.pred_high:,.6g}")
+        return (f"{self.symbol} close={self.last_close:,.6g} | ramalan {self.direction} {self.exp_ret_pct:+.2f}% "
+                f"| peluang naik {self.prob_up:.0%} | R:R {self.rr:.1f} | tren {'naik' if self.trend_up else 'turun'} "
+                f"| RSI {self.rsi:.0f}")
 
 
 class KronosForecaster:
@@ -92,19 +110,28 @@ def make_forecaster(cfg: dict, dummy: bool = False):
     return DummyForecaster(cfg["model"]) if dummy else KronosForecaster(cfg["model"])
 
 
-def build_signal(symbol: str, hist: pd.DataFrame, paths: np.ndarray, fee_pct: float) -> Signal:
+def build_signal(symbol: str, hist: pd.DataFrame, paths: np.ndarray, fee_pct: float,
+                 trend_period: int = 200) -> Signal:
+    from .indicators import snapshot
     last = float(hist["close"].iloc[-1])
     final = paths[:, -1, 3]
     rets = final / last - 1
     hurdle = 2 * fee_pct / 100  # harus naik melebihi biaya beli + jual
+    hi = float(np.median(paths[:, :, 1].max(axis=1)))
+    lo = float(np.median(paths[:, :, 2].min(axis=1)))
+    up = max(0.0, (hi / last - 1) * 100)
+    down = max(1e-6, (1 - lo / last) * 100)
+    exp_ret = float(rets.mean() * 100)
+    prob = float((rets > hurdle).mean())
+    snap = snapshot(hist, trend_period)
+    closes = paths[:, :, 3]
     return Signal(
-        time=str(hist["timestamps"].iloc[-1]),
-        symbol=symbol,
-        last_close=last,
-        exp_ret_pct=float(rets.mean() * 100),
-        median_ret_pct=float(np.median(rets) * 100),
-        prob_up=float((rets > hurdle).mean()),
-        pred_high=float(np.median(paths[:, :, 1].max(axis=1))),
-        pred_low=float(np.median(paths[:, :, 2].min(axis=1))),
-        path=[float(v) for v in np.median(paths[:, :, 3], axis=0)],
+        time=str(hist["timestamps"].iloc[-1]), symbol=symbol, last_close=last,
+        exp_ret_pct=exp_ret, median_ret_pct=float(np.median(rets) * 100), prob_up=prob,
+        pred_high=hi, pred_low=lo,
+        path=[float(v) for v in np.median(closes, axis=0)],
+        path_lo=[float(v) for v in np.percentile(closes, 10, axis=0)],
+        path_hi=[float(v) for v in np.percentile(closes, 90, axis=0)],
+        trend_up=snap["trend_up"], rsi=snap["rsi"], atr_pct=snap["atr_pct"],
+        upside_pct=up, downside_pct=down, rr=up / down, score=exp_ret * prob,
     )

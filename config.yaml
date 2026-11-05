@@ -24,6 +24,16 @@ strategy:
   max_hold_candles: 24
   exit_prob_up_below: 0.35
   cooldown_candles: 2
+  trend_filter: true
+  trend_period: 200
+  rsi_max: 75
+  min_rr: 1.2
+  sl_mode: persen
+  sl_atr_mult: 2.0
+  tp_atr_mult: 4.0
+  trailing_on: true
+  trail_activate_pct: 1.5
+  trail_pct: 1.0
 risk:
   order_size_quote: 15.0
   max_order_size_quote: 50.0

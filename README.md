@@ -28,11 +28,25 @@ Menu **🔑 Akun & Mode** → isi API key Tokocrypto → **Tes koneksi akun** �
 
 | Menu | Fungsi |
 |---|---|
+| 📡 Analisa Realtime | Grafik candle live + garis ramalan AI dan rentangnya, arah prediksi (NAIK/TURUN/SAMPING), peluang naik, potensi untung:rugi, tren, RSI, apa yang akan dilakukan robot; tombol **Ramal sekarang** dan **Pindai banyak koin** |
 | 🏠 Beranda | Nyalakan/matikan robot, lihat saldo & untung/rugi, posisi terbuka + tombol **Jual**, tombol **Jual semua**, **Jeda beli baru**, keputusan terakhir robot |
-| ⚙️ Pengaturan Robot | Koin, timeframe, modal per posisi, **maksimal posisi terbuka**, batas rugi harian, stop-loss, take-profit, seberapa yakin sebelum membeli, ukuran model AI |
+| ⚙️ Pengaturan Robot | Koin, timeframe, modal per posisi, **maksimal posisi terbuka**, batas rugi harian, stop-loss, take-profit, seberapa yakin sebelum membeli, filter tren, batas RSI, rasio untung:rugi, stop-loss otomatis (ATR), **trailing stop**, ukuran model AI |
 | 🔑 Akun & Mode | API key, tes koneksi, pindah Simulasi ↔ Live, reset simulasi |
 | 📊 Riwayat & Grafik | Grafik aset, semua trade, grafik ramalan AI |
-| 🧪 Uji Strategi | Coba pengaturan Anda di data masa lalu sebelum dipakai |
+| 🧪 Uji Strategi | Coba pengaturan Anda di data masa lalu + **optimasi otomatis**: mencari setelan terbaik lalu mengujinya di periode yang belum dilihat; pakai hasilnya dengan satu klik |
+
+## Cara robot memutuskan
+
+Setiap candle tutup, robot meramal semua koin, lalu:
+1. **Mengurus posisi yang ada dulu.** Jual jika kena stop-loss, take-profit, atau trailing stop, sudah terlalu lama dipegang, atau ramalan berbalik turun.
+2. **Membeli mulai dari sinyal terkuat** (skor = perkiraan kenaikan × peluang naik). Robot hanya membeli jika semua syarat lolos:
+   - ramalan naik cukup besar
+   - peluang naik cukup tinggi
+   - tren sedang naik
+   - RSI belum jenuh beli
+   - potensi untung cukup besar dibanding potensi rugi
+   - slot posisi dan saldo masih ada
+3. **Menjaga posisi tiap menit.** Saat harga naik, trailing stop ikut naik untuk mengunci untung.
 
 ## Penting
 

@@ -10,6 +10,8 @@ import streamlit as st
 
 from bot import control as ctl
 from bot.store import WIB
+from bot.strategy import opt as sopt
+from bot import ui_analysis
 from bot.config import KRONOS_DIR, api_keys, live_unlocked, load_config, path_in_root
 
 st.set_page_config(page_title="Robot Trading Kronos", page_icon="🤖", layout="wide")
@@ -110,7 +112,7 @@ def apply_and_restart(new_cfg, msg="Pengaturan disimpan."):
 
 # ======================================================================= sidebar
 st.sidebar.title("🤖 Robot Trading")
-page = st.sidebar.radio("Menu", ["🏠 Beranda", "⚙️ Pengaturan Robot", "🔑 Akun & Mode",
+page = st.sidebar.radio("Menu", ["🏠 Beranda", "📡 Analisa Realtime", "⚙️ Pengaturan Robot", "🔑 Akun & Mode",
                                  "📊 Riwayat & Grafik", "🧪 Uji Strategi"], label_visibility="collapsed")
 st.sidebar.divider()
 st.sidebar.markdown(f"**Mode:** {MODE_LABEL}")
@@ -215,7 +217,7 @@ def page_home():
 
         # ----- keputusan terakhir
         st.subheader("🧠 Keputusan terakhir robot")
-        sig = q("SELECT candle_time, symbol, last_close, exp_ret_pct, prob_up, action, reason FROM signals "
+        sig = q("SELECT candle_time, symbol, last_close, exp_ret_pct, prob_up, direction, action, reason FROM signals "
                 "WHERE mode=? ORDER BY id DESC LIMIT 50", (MODE,))
         if sig.empty:
             st.caption("Belum ada. Nyalakan robot untuk mulai.")
@@ -225,9 +227,10 @@ def page_home():
             lat["Keputusan"] = lat["action"].map(icon).fillna(lat["action"])
             lat["Ramalan naik/turun"] = lat["exp_ret_pct"].map(lambda v: f"{v:+.2f}%")
             lat["Peluang naik"] = lat["prob_up"].map(lambda v: f"{v:.0%}")
+            lat["Arah"] = lat["direction"].map({"NAIK": "🟢 NAIK", "TURUN": "🔴 TURUN", "SAMPING": "🟡 SAMPING"}).fillna("-")
             st.dataframe(lat.rename(columns={"symbol": "Pair", "candle_time": "Waktu", "last_close": "Harga",
                                              "reason": "Alasan"})[
-                ["Pair", "Waktu", "Harga", "Ramalan naik/turun", "Peluang naik", "Keputusan", "Alasan"]],
+                ["Pair", "Waktu", "Harga", "Arah", "Ramalan naik/turun", "Peluang naik", "Keputusan", "Alasan"]],
                 hide_index=True, width="stretch")
 
         st.subheader("📝 Aktivitas terbaru")
@@ -283,7 +286,28 @@ def page_settings():
             cexp = c[0].number_input("Minimal ramalan kenaikan (%)", 0.0, 50.0, float(s_["min_expected_return_pct"]), 0.1)
             cprob = c[1].slider("Minimal peluang naik", 0.5, 1.0, float(s_["min_prob_up"]), 0.05)
 
-        st.subheader("5. Otak AI")
+        st.subheader("5. Kecerdasan tambahan")
+        st.caption("Penyaring agar robot tidak asal beli, dan cara menjaga untung.")
+        c = st.columns(3)
+        trend_on = c[0].toggle("Hanya beli saat tren naik", value=bool(sopt(s_, "trend_filter")),
+                               help="Harga harus di atas garis EMA tren dan garisnya sedang menanjak.")
+        rsi_max = c[1].slider("Jangan beli jika RSI di atas", 50, 100, int(sopt(s_, "rsi_max")),
+                              help="RSI tinggi = harga sudah naik terlalu cepat (jenuh beli). 100 = abaikan.")
+        min_rr = c[2].number_input("Minimal rasio untung : rugi", 0.0, 10.0, float(sopt(s_, "min_rr")), 0.1,
+                                   help="Potensi naik harus sekian kali potensi turun menurut ramalan. 0 = abaikan.")
+        sl_mode = st.radio("Cara menentukan stop-loss & take-profit",
+                           ["Persen tetap (bagian 3)", "Otomatis mengikuti volatilitas (ATR)"],
+                           index=1 if sopt(s_, "sl_mode") == "atr" else 0, horizontal=True)
+        c = st.columns(2)
+        sl_atr = c[0].number_input("ATR: stop-loss = volatilitas ×", 0.5, 10.0, float(sopt(s_, "sl_atr_mult")), 0.5)
+        tp_atr = c[1].number_input("ATR: take-profit = volatilitas ×", 0.5, 20.0, float(sopt(s_, "tp_atr_mult")), 0.5)
+        c = st.columns(3)
+        trail_on = c[0].toggle("Trailing stop (kunci untung)", value=bool(sopt(s_, "trailing_on")),
+                               help="Saat harga naik, batas jual ikut naik. Untung tidak hilang saat harga berbalik.")
+        trail_act = c[1].number_input("Aktif setelah untung (%)", 0.1, 50.0, float(sopt(s_, "trail_activate_pct")), 0.1)
+        trail_pct = c[2].number_input("Jual jika turun dari puncak (%)", 0.1, 50.0, float(sopt(s_, "trail_pct")), 0.1)
+
+        st.subheader("6. Otak AI")
         model_label = st.selectbox("Ukuran model Kronos", list(MODELS), index=list(MODELS).index(cur_model))
 
         with st.expander("Pengaturan lanjutan (biarkan saja jika ragu)"):
@@ -310,7 +334,11 @@ def page_settings():
                            max_order_size_quote=max(maxorder, size))
         new["strategy"].update(stop_loss_pct=sl, take_profit_pct=tp, max_hold_candles=int(hold),
                                min_expected_return_pct=exp_, min_prob_up=prob_, fee_pct=fee,
-                               cooldown_candles=int(cool), exit_prob_up_below=exitp)
+                               cooldown_candles=int(cool), exit_prob_up_below=exitp,
+                               trend_filter=bool(trend_on), rsi_max=int(rsi_max), min_rr=float(min_rr),
+                               sl_mode="atr" if sl_mode.startswith("Otomatis") else "persen",
+                               sl_atr_mult=float(sl_atr), tp_atr_mult=float(tp_atr), trailing_on=bool(trail_on),
+                               trail_activate_pct=float(trail_act), trail_pct=float(trail_pct))
         new["model"].update(name=MODELS[model_label][0], tokenizer=MODELS[model_label][1],
                             n_paths=int(npaths), pred_len=int(plen))
         new["paper"]["starting_balance"] = start_bal
@@ -460,10 +488,13 @@ def page_backtest():
                                 index=list(TIMEFRAMES).index(cfg["timeframe"]) if cfg["timeframe"] in TIMEFRAMES else 2)
             n = c[2].number_input("Berapa candle ke belakang", 100, 3000, 500, 50)
             speed = c[3].selectbox("Kecepatan", ["Teliti (lambat)", "Sedang", "Cepat (kasar)"], index=1)
-            st.caption("Di komputer tanpa GPU, mode Teliti 500 candle bisa 20–40 menit. Hasil disimpan, "
-                       "jadi uji ulang dengan pengaturan jual/beli berbeda berjalan cepat.")
+            optim = st.checkbox("🎯 Sekalian cari setelan terbaik otomatis (optimasi)", value=True,
+                                help="Mencoba ratusan kombinasi setelan. Hanya butuh beberapa detik tambahan.")
+            st.caption("Di komputer tanpa GPU, mode Teliti 500 candle bisa 20–40 menit. Hasil ramalan disimpan, "
+                       "jadi uji ulang berikutnya berjalan cepat.")
             if st.form_submit_button("▶️ Mulai uji", type="primary"):
-                ctl.start_backtest(sym, tf, int(n), {"Teliti (lambat)": 1, "Sedang": 3, "Cepat (kasar)": 6}[speed])
+                ctl.start_backtest(sym, tf, int(n), {"Teliti (lambat)": 1, "Sedang": 3, "Cepat (kasar)": 6}[speed],
+                                   optimize=optim)
                 st.rerun()
     progress()
 
@@ -491,7 +522,53 @@ def page_backtest():
     if Path(base + "_trades.csv").exists():
         with st.expander("Daftar trade"):
             st.dataframe(pd.read_csv(base + "_trades.csv"), hide_index=True, width="stretch")
+    optim_section(Path(base + "_optimasi.json"))
 
 
-{"🏠 Beranda": page_home, "⚙️ Pengaturan Robot": page_settings, "🔑 Akun & Mode": page_account,
+def describe(p):
+    stop = (f"SL {p['sl_atr_mult']}×ATR / TP {p['tp_atr_mult']}×ATR" if p.get("sl_mode") == "atr"
+            else f"SL {p['stop_loss_pct']}% / TP {p['take_profit_pct']}%")
+    trail = f"trailing {p['trail_pct']}% (aktif +{p['trail_activate_pct']}%)" if p.get("trailing_on") else "tanpa trailing"
+    return (f"beli jika ramalan ≥ {p['min_expected_return_pct']}% & peluang ≥ {p['min_prob_up']:.0%} · {stop} · "
+            f"{trail} · {'ikut tren' if p.get('trend_filter') else 'abaikan tren'}")
+
+
+def optim_section(path: Path):
+    if not path.exists():
+        return
+    res = json.loads(path.read_text())
+    st.subheader("🎯 Hasil optimasi setelan")
+    st.caption(f"Setelan dicari di periode LATIH ({res['periode_latih'][0][:10]} – {res['periode_latih'][1][:10]}), "
+               f"lalu dinilai di periode UJI ({res['periode_uji'][0][:10]} – {res['periode_uji'][1][:10]}) yang tidak "
+               "dipakai saat mencari. **Lihat kolom Hasil UJI**: itu gambaran yang lebih jujur. "
+               "Setelan yang bagus di latih tapi rugi di uji kemungkinan hanya kebetulan.")
+    rows = [("Setelan sekarang", res["setelan_sekarang"])] + [(f"Kandidat #{i}", r) for i, r in enumerate(res["terbaik"], 1)]
+    table = pd.DataFrame([{
+        "": name, "Hasil LATIH": f"{r['latih']['return_pct']:+.2f}%", "Hasil UJI": f"{r['uji']['return_pct']:+.2f}%",
+        "Trade (uji)": r["uji"]["trades"], "Menang (uji)": f"{r['uji']['win_pct']:.0f}%",
+        "Penurunan (uji)": f"{r['uji']['max_dd_pct']:.2f}%", "Beli&tahan (uji)": f"{r['uji']['buyhold_pct']:+.2f}%",
+        "Setelan": describe(r["params"])} for name, r in rows])
+    st.dataframe(table, hide_index=True, width="stretch")
+    if not res["terbaik"]:
+        st.info("Tidak ada kombinasi yang cukup sering trading di periode latih.")
+        return
+    c = st.columns([2, 1])
+    k = c[0].selectbox("Pilih kandidat untuk dipakai robot", range(1, len(res["terbaik"]) + 1),
+                       format_func=lambda i: f"Kandidat #{i} (uji {res['terbaik'][i - 1]['uji']['return_pct']:+.2f}%)")
+    chosen = res["terbaik"][k - 1]
+    if chosen["uji"]["return_pct"] <= 0:
+        c[0].warning("Kandidat ini rugi di periode UJI. Sebaiknya jangan dipakai.")
+    if c[1].button("✅ Pakai setelan ini", type="primary", width="stretch"):
+        keys = ["min_expected_return_pct", "min_prob_up", "sl_mode", "stop_loss_pct", "take_profit_pct",
+                "sl_atr_mult", "tp_atr_mult", "trailing_on", "trail_activate_pct", "trail_pct", "trend_filter"]
+        new = json.loads(json.dumps(cfg))
+        new["strategy"].update({x: chosen["params"][x] for x in keys if x in chosen["params"]})
+        apply_and_restart(new, f"Setelan kandidat #{k} dipakai.")
+
+
+def page_analysis():
+    ui_analysis.page(cfg, q, MODE, all_pairs(cfg["exchange"], cfg.get("quote", "USDT")), TIMEFRAMES)
+
+
+{"🏠 Beranda": page_home, "📡 Analisa Realtime": page_analysis, "⚙️ Pengaturan Robot": page_settings, "🔑 Akun & Mode": page_account,
  "📊 Riwayat & Grafik": page_history, "🧪 Uji Strategi": page_backtest}[page]()

@@ -4,7 +4,7 @@ import logging
 from .config import ROOT
 from .forecast import build_signal
 from .market import fetch_recent, future_timestamps, tf_ms
-from .strategy import entry_decision, price_exit, signal_exit
+from .strategy import entry_decision, exit_levels, opt, price_exit, signal_exit, trail
 
 log = logging.getLogger("engine")
 STOP_FILE = ROOT / "STOP"
@@ -18,50 +18,89 @@ class Engine:
         self.tfms = tf_ms(ex, self.tf)
 
     # ------------------------------------------------------------------ siklus candle
-    def candle_cycle(self):
-        for sym in self.cfg["symbols"]:
-            try:
-                self._symbol_cycle(sym)
-            except Exception as e:  # noqa: BLE001
-                log.exception("Error saat memproses %s", sym)
-                self.store.event("ERROR", f"{sym}: {e}")
-        self.record_equity()
-
-    def _symbol_cycle(self, sym):
+    def forecast_symbol(self, sym):
         hist = fetch_recent(self.ex, sym, self.tf, int(self.m["lookback"]))
         if len(hist) < 100:
-            log.warning("%s: data hanya %d candle, dilewati", sym, len(hist))
-            return
+            raise RuntimeError(f"data hanya {len(hist)} candle")
         y_ts = future_timestamps(hist["timestamps"].iloc[-1], self.tfms, int(self.m["pred_len"]))
-        sig = build_signal(sym, hist, self.fc.paths(hist, y_ts), self.s["fee_pct"])
-        action, reason = self._decide_and_act(sym, sig, int(hist["ts"].iloc[-1]))
-        self.store.add_signal(sig, action, reason)
-        log.info("%s  ->  %s (%s)", sig.summary(), action, reason)
+        sig = build_signal(sym, hist, self.fc.paths(hist, y_ts), self.s["fee_pct"], int(opt(self.s, "trend_period")))
+        return sig, int(hist["ts"].iloc[-1])
 
-    def _decide_and_act(self, sym, sig, candle_ts):
-        positions = self.store.open_positions(sym)
-        if positions:
-            pos = positions[0]
-            held = int((candle_ts - pos["entry_candle_ts"]) // self.tfms)
-            px, why = price_exit(pos["entry_price"], sig.last_close, sig.last_close, sig.last_close, self.s)
-            if px is None:
-                hit, why = signal_exit(held, sig, self.s)
-            else:
-                hit = True
-            if hit:
-                self.close(pos, why, candle_ts)
-                return "JUAL", why
-            chg = (sig.last_close / pos["entry_price"] - 1) * 100
-            return "TAHAN", f"posisi {held} candle, {chg:+.2f}% dari harga beli"
+    def candle_cycle(self):
+        # 1) ramal semua pair
+        sigs = {}
+        for sym in self.cfg["symbols"]:
+            try:
+                sigs[sym] = self.forecast_symbol(sym)
+            except Exception as e:  # noqa: BLE001
+                log.exception("Error saat meramal %s", sym)
+                self.store.event("ERROR", f"{sym}: {e}")
+        decisions = {}
+        # 2) urus posisi yang sudah ada dulu (jual / tahan)
+        for sym, (sig, ts) in sigs.items():
+            if self.store.open_positions(sym):
+                try:
+                    decisions[sym] = self._manage(sym, sig, ts)
+                except Exception as e:  # noqa: BLE001
+                    log.exception("Error mengelola posisi %s", sym)
+                    decisions[sym] = ("ERROR", str(e))
+        # 3) beli: sinyal terkuat didahulukan
+        cands = sorted((x for x in sigs if x not in decisions), key=lambda x: sigs[x][0].score, reverse=True)
+        for sym in cands:
+            sig, ts = sigs[sym]
+            try:
+                decisions[sym] = self._maybe_buy(sym, sig, ts)
+            except Exception as e:  # noqa: BLE001
+                log.exception("Error membeli %s", sym)
+                self.store.event("ERROR", f"Gagal membeli {sym}: {e}")
+                decisions[sym] = ("ERROR", str(e))
+        for sym, (sig, _) in sigs.items():
+            action, reason = decisions.get(sym, ("-", ""))
+            self.store.add_signal(sig, action, reason)
+            log.info("%s  ->  %s (%s)", sig.summary(), action, reason)
+        self.record_equity()
 
+    def _stops(self, pos):
+        sl, tp = pos.get("sl"), pos.get("tp")
+        if sl is None or tp is None:
+            sl, tp = exit_levels(pos["entry_price"], None, self.s)
+        return sl, tp, pos.get("peak") or pos["entry_price"]
+
+    def _manage(self, sym, sig, candle_ts):
+        pos = self.store.open_positions(sym)[0]
+        held = int((candle_ts - pos["entry_candle_ts"]) // self.tfms)
+        why = self._check_price(pos, sig.last_close)
+        if why:
+            return "JUAL", why
+        hit, why = signal_exit(held, sig, self.s)
+        if hit:
+            self.close(pos, why, candle_ts)
+            return "JUAL", why
+        chg = (sig.last_close / pos["entry_price"] - 1) * 100
+        return "TAHAN", f"posisi {held} candle, {chg:+.2f}% dari harga beli"
+
+    def _maybe_buy(self, sym, sig, candle_ts):
         ok, why = self.can_open(sym, candle_ts)
         if not ok:
             return "LEWATI", why
         ok, why = entry_decision(sig, self.s)
         if not ok:
             return "TUNGGU", why
-        self.open(sym, why, candle_ts)
+        self.open(sym, why, candle_ts, sig)
         return "BELI", why
+
+    def _check_price(self, pos, price) -> str:
+        """Perbarui trailing stop lalu cek SL/TP. Mengembalikan alasan jual, atau "" jika tetap ditahan."""
+        sl, tp, peak = self._stops(pos)
+        peak = max(peak, price)
+        sl = trail(pos["entry_price"], peak, sl, self.s)
+        if (sl, tp, peak) != (pos.get("sl"), pos.get("tp"), pos.get("peak")):
+            self.store.update_stops(pos["id"], sl, tp, peak)
+        px, why = price_exit(pos["entry_price"], sl, tp, price, price, price)
+        if px is not None:
+            self.close(pos, why)
+            return why
+        return ""
 
     # ------------------------------------------------------------------ aturan risiko
     def order_size(self):
@@ -88,11 +127,13 @@ class Engine:
         return True, ""
 
     # ------------------------------------------------------------------ eksekusi
-    def open(self, sym, reason, candle_ts):
+    def open(self, sym, reason, candle_ts, sig=None):
         size = self.order_size()
         fill = self.broker.buy(sym, size)
-        self.store.add_position(sym, fill, candle_ts, reason)
-        msg = f"BELI {sym}: {fill.amount:.8g} @ {fill.price:,.6g} (modal {fill.cost:.2f}) — {reason}"
+        sl, tp = exit_levels(fill.price, sig, self.s)
+        self.store.add_position(sym, fill, candle_ts, reason, sl, tp)
+        msg = (f"BELI {sym}: {fill.amount:.8g} @ {fill.price:,.6g} (modal {fill.cost:.2f}) | "
+               f"SL {sl:,.6g} TP {tp:,.6g} — {reason}")
         log.info("✅ %s", msg)
         self.store.event("TRADE", msg)
 
@@ -110,10 +151,7 @@ class Engine:
         """Dipanggil tiap beberapa detik: cek stop-loss/take-profit dengan harga terkini."""
         for pos in self.store.open_positions():
             try:
-                p = self.broker.price(pos["symbol"])
-                px, why = price_exit(pos["entry_price"], p, p, p, self.s)
-                if px is not None:
-                    self.close(pos, why)
+                self._check_price(pos, self.broker.price(pos["symbol"]))
             except Exception as e:  # noqa: BLE001
                 log.warning("Cek harga %s gagal: %s", pos["symbol"], e)
 

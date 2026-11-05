@@ -43,7 +43,21 @@ class Store:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        self._migrate()
         self.db.commit()
+
+    def _migrate(self):
+        """Tambah kolom baru ke database lama tanpa menghapus data."""
+        want = {
+            "positions": {"sl": "REAL", "tp": "REAL", "peak": "REAL"},
+            "signals": {"path_lo": "TEXT", "path_hi": "TEXT", "trend_up": "INTEGER", "rsi": "REAL",
+                        "atr_pct": "REAL", "rr": "REAL", "score": "REAL", "direction": "TEXT"},
+        }
+        for table, cols in want.items():
+            have = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
+            for c, t in cols.items():
+                if c not in have:
+                    self.db.execute(f"ALTER TABLE {table} ADD COLUMN {c} {t}")
 
     # ---------- key-value ----------
     def get_kv(self, key, default=None):
@@ -63,12 +77,16 @@ class Store:
             args.append(symbol)
         return [dict(r) for r in self.db.execute(q, args)]
 
-    def add_position(self, symbol, fill, candle_ts, reason):
+    def add_position(self, symbol, fill, candle_ts, reason, sl=None, tp=None):
         self.db.execute(
             "INSERT INTO positions(mode,symbol,status,entry_time,entry_price,amount,cost,entry_fee,"
-            "entry_candle_ts,entry_reason,order_id_buy) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "entry_candle_ts,entry_reason,order_id_buy,sl,tp,peak) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (self.mode, symbol, "open", now_wib(), fill.price, fill.amount, fill.cost, fill.fee,
-             int(candle_ts), reason, fill.order_id))
+             int(candle_ts), reason, fill.order_id, sl, tp, fill.price))
+        self.db.commit()
+
+    def update_stops(self, pos_id, sl, tp, peak):
+        self.db.execute("UPDATE positions SET sl=?, tp=?, peak=? WHERE id=?", (sl, tp, peak, pos_id))
         self.db.commit()
 
     def close_position(self, pos_id, fill, reason):
@@ -97,10 +115,12 @@ class Store:
     def add_signal(self, sig, action, reason):
         self.db.execute(
             "INSERT INTO signals(mode,created,candle_time,symbol,last_close,exp_ret_pct,median_ret_pct,"
-            "prob_up,pred_high,pred_low,action,reason,path) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "prob_up,pred_high,pred_low,action,reason,path,path_lo,path_hi,trend_up,rsi,atr_pct,rr,score,direction)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (self.mode, now_wib(), sig.time, sig.symbol, sig.last_close, sig.exp_ret_pct,
              sig.median_ret_pct, sig.prob_up, sig.pred_high, sig.pred_low, action, reason,
-             json.dumps(sig.path)))
+             json.dumps(sig.path), json.dumps(sig.path_lo), json.dumps(sig.path_hi), int(sig.trend_up),
+             sig.rsi, sig.atr_pct, sig.rr, sig.score, sig.direction))
         self.db.commit()
 
     def add_equity(self, cash, pos_value):
