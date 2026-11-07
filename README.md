@@ -85,18 +85,27 @@ Tab **Best settings** mengurutkan setelan dari yang paling konsisten. Tombol **A
 
 ### Pakai GPU (VGA)
 
-Tidak harus NVIDIA. `MULAI.bat` mendeteksi kartu grafis lalu memasang pendukungnya, sekali saja:
+Semua VGA bisa dicoba. Saat pertama dibuka, MULAI memeriksa kartu grafis dan memasang pendukungnya, lalu mengetesnya dengan operasi yang dipakai AI:
 
-| Kartu grafis | Cara pakai |
+| Kartu grafis | Dicoba lewat |
 |---|---|
-| NVIDIA GeForce / RTX | CUDA, paling cepat |
-| AMD Radeon | DirectML (Windows) |
-| Intel Arc / Core Ultra | Intel XPU |
-| Mac M1–M4 | Metal, otomatis |
+| NVIDIA GeForce / RTX | CUDA (paling cepat) |
+| Intel Arc, Core Ultra | Intel XPU, kalau gagal DirectML |
+| Intel UHD / Iris Xe (bawaan prosesor) | DirectML |
+| AMD Radeon | DirectML |
+| VGA lain dengan DirectX 12 | DirectML |
+| Mac M1–M4 | Metal (otomatis) |
 
-Pilih **Compute → GPU** di Backtest, atau **Settings → AI model & compute** untuk robot dan Scanner. Kalau GPU gagal menjalankan sebuah operasi, robot otomatis pindah ke CPU dan tidak berhenti. Kalau pemasangan gagal, hapus file `.venv\gpu_checked_v2` lalu jalankan MULAI lagi.
+Kalau tes gagal, cara berikutnya dicoba. Kalau semua gagal, robot tetap jalan dengan CPU.
 
-Dengan GPU, banyak titik waktu diramal sekaligus. Hasilnya jauh lebih cepat, cukup untuk model **Accurate** dan 30–50 skenario ramalan.
+- **DirectML butuh Python 3.11 atau 3.12.** MULAI otomatis memakai Python 3.12/3.11 kalau terpasang. Kalau komputermu hanya punya Python 3.13: install Python 3.12 dari python.org, hapus folder `.venv`, lalu jalankan MULAI lagi.
+- Di **Settings → AI model & compute** terlihat VGA yang terdeteksi, yang sedang dipakai AI, dan hasil pemeriksaan terakhir.
+  - **Test speed** membandingkan kecepatan CPU dan GPU dengan model AI-mu.
+  - **Set up GPU again** mengulang pemeriksaan saat MULAI dibuka berikutnya.
+- VGA bawaan prosesor (Intel UHD/Iris) kadang tidak lebih cepat dari CPU. Pakai **Test speed** untuk memastikan.
+- Kalau GPU gagal menjalankan sebuah operasi di tengah jalan, robot otomatis pindah ke CPU dan tidak berhenti.
+
+Dengan GPU yang kencang, banyak titik waktu diramal sekaligus. Itu cukup untuk model **Accurate** dan 30–50 skenario.
 
 ### Lihat ramalan AI di masa lalu
 

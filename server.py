@@ -1022,6 +1022,71 @@ def system():
                       "pred_len": c["model"]["pred_len"], "lookback": c["model"]["lookback"]}}
 
 
+@app.post("/api/system/gpu-redo")
+def gpu_redo():
+    """Minta MULAI memeriksa & memasang ulang pendukung kartu grafis saat dibuka berikutnya."""
+    f = ROOT / ".venv" / "gpu_redo"
+    f.parent.mkdir(exist_ok=True)
+    f.write_text("ok")
+    return {"ok": True}
+
+
+@app.post("/api/system/benchmark")
+def benchmark():
+    """Ukur kecepatan ramalan di CPU dan di GPU yang terpasang, dengan model AI dari setelan."""
+    if not (KRONOS_DIR / "model").exists():
+        fail("Setup belum selesai: folder Kronos belum ada.")
+    jid = uuid.uuid4().hex[:8]
+    job = {"id": jid, "done": 0, "total": 0, "finished": False, "error": "", "result": None, "current": ""}
+    _jobs[jid] = job
+
+    def work():
+        from bot.forecast import KronosForecaster, default_batch, gpu_candidates
+        try:
+            m = full_cfg()["model"]
+            lb, h = int(m["lookback"]), int(m["pred_len"])
+            rng = np.random.default_rng(1)
+            c = 100 * np.exp(np.cumsum(rng.normal(0, 0.004, lb)))
+            ts = pd.date_range("2026-01-01", periods=lb, freq="h")
+            hist = pd.DataFrame({"timestamps": ts, "open": c, "high": c * 1.002, "low": c * 0.998, "close": c,
+                                 "volume": 100.0, "amount": c * 100})
+            y = pd.Series(pd.date_range(ts[-1] + pd.Timedelta(hours=1), periods=h, freq="h"))
+            devs = ["cpu"] + [str(d) for d in gpu_candidates()]
+            job["total"] = len(devs)
+            rows = []
+            for d in devs:
+                job["current"] = d
+                try:
+                    t0 = time.time()
+                    fc = KronosForecaster(m, d)
+                    load = time.time() - t0
+                    bs = default_batch(fc.device)
+                    fc.paths_many([(hist, y)])                      # pemanasan
+                    t1 = time.time()
+                    fc.paths_many([(hist, y)] * bs)
+                    spp = (time.time() - t1) / bs
+                    rows.append({"device": fc.device_name, "kind": "cpu" if d == "cpu" else "gpu", "ok": d == "cpu" or fc.kind != "cpu",
+                                 "sec_per_point": spp, "batch": bs, "load_sec": load})
+                    del fc
+                except Exception as e:  # noqa: BLE001
+                    rows.append({"device": d, "kind": "gpu", "ok": False, "error": str(e).splitlines()[0][:300]})
+                job["done"] += 1
+            cpu = next((r for r in rows if r["kind"] == "cpu" and r.get("sec_per_point")), None)
+            for r in rows:
+                if cpu and r.get("sec_per_point"):
+                    r["speedup"] = cpu["sec_per_point"] / r["sec_per_point"]
+            best = min((r for r in rows if r.get("ok") and r.get("sec_per_point")), key=lambda r: r["sec_per_point"], default=None)
+            job["result"] = {"rows": rows, "best": best and best["kind"],
+                             "model": m["name"], "n_paths": m["n_paths"]}
+        except Exception as e:  # noqa: BLE001
+            job["error"] = str(e)
+        finally:
+            job["finished"] = True
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"job": jid}
+
+
 @app.post("/api/backtest/start")
 def bt_start(symbols: list = Body(None, embed=True), symbol: str = Body("", embed=True),
              tf: str = Body(..., embed=True), candles: int = Body(1000, embed=True),

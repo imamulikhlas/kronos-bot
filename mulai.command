@@ -23,5 +23,11 @@ if ! cmp -s requirements.txt .venv/req_installed.txt; then
   echo "Memperbarui library untuk versi baru..."
   pip install -r requirements.txt && cp requirements.txt .venv/req_installed.txt
 fi
+if [ -f .venv/gpu_redo ]; then rm -f .venv/gpu_redo .venv/gpu_checked_v3; fi
+if [ ! -f .venv/gpu_checked_v3 ]; then
+  echo "Memeriksa kartu grafis untuk AI, sekali saja..."
+  python setup_gpu.py
+  echo ok > .venv/gpu_checked_v3
+fi
 echo "Panel Kontrol terbuka di browser: http://localhost:8501  (biarkan jendela ini terbuka)"
 python server.py

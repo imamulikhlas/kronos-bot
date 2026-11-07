@@ -358,6 +358,12 @@ tr.mark-row td { background: var(--card-2); }
 .results small { color: var(--ink-3); grid-column: 1 / -1; }
 pre.log { margin: 10px 0 0; padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; font-size: 12.5px; white-space: pre-wrap; max-height: 240px; overflow: auto; color: var(--ink-2); }
 
+/* ---------------- GPU status ---------------- */
+.gpubox { display: grid; gap: 10px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--line); background: var(--card-2); font-size: 14px; }
+.gpu-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 10px; }
+.gpu-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.gpubox summary { cursor: pointer; color: var(--ink-2); }
+
 /* ---------------- AI track record ---------------- */
 .hist-ctl { display: inline-flex; align-items: center; gap: 8px; }
 .track { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1.3fr); gap: 18px 28px; align-items: center; }

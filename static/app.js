@@ -1145,6 +1145,48 @@ const PRESETS = {
 const PRESET_TXT = { careful: ["Careful", "jarang buka posisi, sinyal harus sangat kuat"], balanced: ["Balanced", "seimbang, disarankan"], active: ["Active", "lebih sering trading, risikonya lebih besar"], custom: ["Custom", "atur angkanya sendiri"] };
 const MODELS = { light: ["Light", "paling cepat, cocok untuk laptop biasa"], balanced: ["Balanced", "seimbang, disarankan"], accurate: ["Accurate", "paling teliti, butuh komputer kuat"] };
 
+/* status kartu grafis + tes kecepatan (dipakai di Settings) */
+function renderGpuBox(el, sys, onPick) {
+  const st = sys.setup;
+  const using = sys.gpu ? `${esc(sys.gpu)}${sys.backend ? ` lewat ${esc(sys.backend)}` : ""}${sys.vram_gb ? ` · ${nf(sys.vram_gb, 0)} GB` : ""}` : "CPU";
+  const tried = (st?.tried || []).map((t) => `<li><i class="${t.ok ? "ok" : "no"}">${t.ok ? "✓" : "✕"}</i><span><b>${esc(t.kind.toUpperCase())}</b> ${esc(t.detail || "")}</span></li>`).join("");
+  el.innerHTML = `
+    <div class="gpu-row"><span class="soft">Graphics cards</span><b>${(sys.os_gpus || []).length ? sys.os_gpus.map(esc).join(", ") : "tidak terdeteksi"}</b></div>
+    <div class="gpu-row"><span class="soft">AI runs on</span><b class="${sys.gpu ? "up" : ""}">${using}</b></div>
+    ${sys.gpu_broken ? `<div class="notice warn">${esc(sys.gpu_broken)} terpasang tapi gagal tes, jadi AI memakai CPU.</div>` : ""}
+    ${sys.gpu_unused && !sys.gpu_broken ? `<div class="notice warn"><b>${esc(sys.gpu_unused_name || "Kartu grafis")} belum dipakai.</b> ${st ? esc(st.message || "") : "Pemeriksaan VGA belum dijalankan."} ${/Python/.test(st?.message || "") ? "" : "Tekan <b>Set up GPU again</b>, lalu tutup jendela MULAI dan buka lagi."}</div>` : ""}
+    ${tried ? `<details><summary class="small">Hasil pemeriksaan terakhir${st?.time ? ` (${esc(st.time)}, Python ${esc(st.python || "")})` : ""}</summary><ul class="checks" style="margin-top:8px">${tried}</ul></details>` : ""}
+    <div class="gpu-actions"><button type="button" class="btn sm" id="gpuBench" data-busy="Testing…">Test speed</button><button type="button" class="btn sm ghost" id="gpuRedo">Set up GPU again</button></div>
+    <div id="gpuBenchOut"></div>`;
+  $("#gpuRedo", el).onclick = async () => {
+    try { await api("/api/system/gpu-redo", {}); toast("Siap. Tutup jendela MULAI lalu buka lagi untuk memeriksa ulang VGA.", "ok", 8000); }
+    catch (e) { toast(e.message, "err"); }
+  };
+  $("#gpuBench", el).onclick = (e) => busy(e.currentTarget, async () => {
+    const out = $("#gpuBenchOut", el);
+    try {
+      const { job } = await api("/api/system/benchmark", {});
+      out.innerHTML = `<p class="soft small"><span class="spinner"></span> Memuat model dan meramal di tiap perangkat…</p>`;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const j = await api(`/api/scan/${job}`);
+        if (!out.isConnected) return;
+        if (!j.finished) { out.innerHTML = `<p class="soft small"><span class="spinner"></span> Menguji ${esc(j.current || "")} (${j.done}/${j.total})…</p>`; continue; }
+        if (j.error) { out.innerHTML = `<div class="notice err">${esc(j.error)}</div>`; return; }
+        const r = j.result;
+        out.innerHTML = `<table style="margin-top:8px"><thead><tr><th>Device</th><th class="r">Per forecast</th><th class="r">Speed</th><th></th></tr></thead><tbody>
+          ${r.rows.map((x) => `<tr><td>${esc(x.device)}</td><td class="r">${x.sec_per_point ? nf(x.sec_per_point, 2) + " s" : "–"}</td>
+            <td class="r">${x.speedup ? `<b class="${x.speedup > 1.1 ? "up" : x.speedup < 0.9 ? "down" : ""}">${nf(x.speedup, 1)}×</b>` : "–"}</td>
+            <td>${x.ok ? "" : `<span class="tag warn" title="${esc(x.error || "")}">${x.error ? "error" : "fell back to CPU"}</span>`}</td></tr>`).join("")}</tbody></table>
+          <p class="small" style="margin:8px 0 0">${r.best === "gpu" ? "GPU lebih cepat. Pilih <b>Auto</b> atau <b>GPU</b>." : "CPU sama cepat atau lebih cepat di komputer ini (umum untuk VGA bawaan). Pilih <b>CPU</b>."}
+            <button type="button" class="btn sm" id="gpuUse">Use ${r.best === "gpu" ? "GPU" : "CPU"}</button></p>`;
+        $("#gpuUse", out).onclick = () => { onPick(r.best === "gpu" ? "gpu" : "cpu"); toast("Pilihan perangkat diganti. Tekan Save changes untuk menyimpan."); };
+        return;
+      }
+    } catch (err) { out.innerHTML = `<div class="notice err">${esc(err.message)}</div>`; }
+  });
+}
+
 PAGES.settings = async (view) => {
   const m = M;
   view.innerHTML = `<div class="head"><div><h1>${MKT[m]} settings</h1></div></div><div class="card"><div class="empty"><span class="spinner"></span></div></div>`;
@@ -1215,7 +1257,8 @@ PAGES.settings = async (view) => {
         <div class="stack" style="gap:16px">
           <div class="choices" id="models">${Object.entries(MODELS).map(([k, t]) => `<button type="button" class="choice" data-model="${k}"><b>${t[0]}</b><span>${t[1]}</span></button>`).join("")}</div>
           <div class="field"><span class="label">Run the AI on</span><div id="devSeg"></div>
-            <div class="hint">${sys.gpu ? `Terdeteksi: <b>${esc(sys.gpu)}</b>${sys.vram_gb ? ` (${nf(sys.vram_gb, 0)} GB)` : ""}.` : sys.gpu_unused ? `Kartu grafis ${esc(sys.gpu_unused_name || "")} terdeteksi tapi belum dipakai. Tutup panel lalu jalankan MULAI lagi untuk memasang pendukung GPU-nya.` : "Tidak ada GPU yang bisa dipakai. Robot memakai CPU."}</div></div>
+            </div>
+          <div class="gpubox" id="gpuBox"></div>
           <div class="fields">
             ${sw("model.ensemble", "Ensemble forecast", "skenario dibagi ke 3 panjang riwayat berbeda, ramalan lebih stabil, beban hampir sama")}
             ${num("model.n_paths", { label: "Forecast scenarios", unit: "paths", step: 1, min: 2, max: 100, hint: "makin banyak, peluang naik/turun makin stabil. GPU: 30–50" })}
@@ -1276,6 +1319,7 @@ PAGES.settings = async (view) => {
   };
   $("#models").onclick = (e) => { const b = e.target.closest("[data-model]"); if (b) { d.model.size = b.dataset.model; derived(); } };
   seg($("#devSeg"), { auto: "Auto", gpu: sys.gpu ? `GPU · ${sys.gpu}` : "GPU", cpu: "CPU" }, d.model.device || "auto", (v) => { d.model.device = v; derived(); });
+  renderGpuBox($("#gpuBox"), sys, (dev) => { d.model.device = dev; seg($("#devSeg"), { auto: "Auto", gpu: sys.gpu ? `GPU · ${sys.gpu}` : "GPU", cpu: "CPU" }, dev, (v) => { d.model.device = v; derived(); }); derived(); });
   seg($("#slSeg"), { persen: "Fixed %", atr: "Follow volatility (ATR)" }, d.strategy.sl_mode, (v) => { d.strategy.sl_mode = v; derived(); });
   seg($("#tfSeg"), TF_LONG, d.timeframe, (v) => { d.timeframe = v; derived(); });
   if (fx) seg($("#srcSeg"), { auto: "Auto", mt5: "MetaTrader 5", yahoo: "Yahoo Finance" }, d.source || "auto", (v) => { d.source = v; derived(); });

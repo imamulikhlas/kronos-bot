@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from .config import KRONOS_DIR
+from .config import KRONOS_DIR, ROOT
 
 log = logging.getLogger("forecast")
 COLS = ["open", "high", "low", "close", "volume", "amount"]
@@ -124,29 +124,80 @@ def system_info() -> dict:
                 info.update(gpu=dml.device_name(0), best="dml", backend="DirectML")
     except Exception as e:  # noqa: BLE001
         info["error"] = str(e)
-    real = [g for g in info["os_gpus"] if gpu_vendor(g) in ("nvidia", "amd", "intel")]
+    real = [g for g in info["os_gpus"] if gpu_vendor(g) != "apple" or info["best"] == "cpu"]
     info["gpu_unused"] = bool(real) and info["best"] == "cpu"
     info["gpu_unused_name"] = real[0] if info["gpu_unused"] else None
+    try:
+        import json
+        f = ROOT / ".venv" / "gpu_setup.json"
+        info["setup"] = json.loads(f.read_text()) if f.exists() else None
+    except Exception:  # noqa: BLE001
+        info["setup"] = None
+    if info["best"] != "cpu":
+        try:
+            import torch  # noqa: F401
+            dev = resolve_device("gpu")
+            if dev == "cpu":
+                info.update(best="cpu", gpu_broken=info["gpu"], gpu=None, backend=None, gpu_unused=True,
+                            gpu_unused_name=info["gpu"])
+        except Exception:  # noqa: BLE001
+            pass
     return info
 
 
-def resolve_device(pref: str | None):
-    """'auto' | 'gpu' | 'cpu' -> device PyTorch terbaik yang tersedia."""
+_ok_cache: dict = {}
+
+
+def _works(dev) -> bool:
+    """Tes kecil: apakah device ini bisa menjalankan operasi yang dipakai model."""
+    key = str(dev)
+    if key in _ok_cache:
+        return _ok_cache[key]
+    try:
+        import torch
+        x = torch.randn(8, 16, 32, device=dev)
+        y = torch.nn.functional.layer_norm(x @ torch.randn(32, 32, device=dev), (32,))
+        p = torch.softmax(y.mean(dim=1), dim=-1)
+        torch.multinomial(p, 1).sum().item()
+        ok = True
+    except Exception as e:  # noqa: BLE001
+        log.warning("GPU %s tidak bisa dipakai: %s", key, str(e).splitlines()[0][:200])
+        ok = False
+    _ok_cache[key] = ok
+    return ok
+
+
+def gpu_candidates() -> list:
+    """Semua device GPU yang terpasang di PyTorch, dari yang biasanya paling cepat."""
     import torch
+    out = []
+    if torch.cuda.is_available():
+        out.append("cuda:0")
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        out.append("xpu")
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        out.append("mps")
+    dml = _dml()
+    if dml is not None:
+        out.append(dml.device(0))
+    return out
+
+
+def resolve_device(pref: str | None):
+    """'auto' | 'gpu' | 'cpu' -> device PyTorch terbaik yang benar-benar jalan."""
     pref = (pref or "auto").lower()
     if pref == "cpu":
         return "cpu"
-    if torch.cuda.is_available():
-        return "cuda:0"
-    if hasattr(torch, "xpu") and torch.xpu.is_available():
-        return "xpu"
-    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-        return "mps"
-    dml = _dml()
-    if dml is not None:
-        return dml.device(0)
+    cands = gpu_candidates()
+    if pref not in ("auto", "gpu"):
+        for dev in cands:
+            if str(dev) == pref and _works(dev):
+                return dev
+    for dev in cands:
+        if _works(dev):
+            return dev
     if pref == "gpu":
-        log.warning("GPU diminta tetapi tidak terdeteksi oleh PyTorch, memakai CPU.")
+        log.warning("GPU diminta tetapi tidak ada yang bisa dipakai PyTorch, memakai CPU.")
     return "cpu"
 
 
