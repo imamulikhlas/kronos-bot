@@ -56,14 +56,15 @@ class PaperBroker:
         self.s = strat(cfg, venue)
         self.slip = cfg["paper"]["slippage_pct"] / 100
         self.fx = cfg.get("forex") or {}
-        if store.get_kv("paper_cash") is None:
-            store.set_kv("paper_cash", float(cfg["paper"]["starting_balance"]))
+        self._cash_key = f"paper_cash:{venue}"
+        if store.get_kv(self._cash_key) is None:
+            store.set_kv(self._cash_key, float(cfg["paper"]["starting_balance"]))
 
     def cash(self) -> float:
-        return float(self.store.get_kv("paper_cash", 0.0))
+        return float(self.store.get_kv(self._cash_key, 0.0))
 
     def _add_cash(self, v):
-        self.store.set_kv("paper_cash", self.cash() + v)
+        self.store.set_kv(self._cash_key, self.cash() + v)
 
     def price(self, symbol) -> float:
         return self.data.price(symbol)

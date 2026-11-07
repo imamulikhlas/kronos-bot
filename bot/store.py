@@ -36,9 +36,14 @@ def now_wib() -> str:
     return datetime.now(WIB).strftime("%Y-%m-%d %H:%M:%S")
 
 
+VCOL = "COALESCE(venue,'crypto')"   # data lama tanpa kolom market dianggap kripto
+
+
 class Store:
-    def __init__(self, path, mode: str):
-        self.mode = mode
+    """mode = 'paper' | 'live'. venue = 'crypto' | 'forex' (None = semua market, untuk laporan)."""
+
+    def __init__(self, path, mode: str, venue: str | None = None):
+        self.mode, self.venue = mode, venue
         self.db = sqlite3.connect(str(path), check_same_thread=False, timeout=30)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.row_factory = sqlite3.Row
@@ -55,6 +60,8 @@ class Store:
                         "atr_pct": "REAL", "rr": "REAL", "score": "REAL", "direction": "TEXT",
                         "prob_down": "REAL", "trend_down": "INTEGER", "rr_short": "REAL", "venue": "TEXT",
                         "tf": "TEXT", "horizon": "INTEGER", "eval_ret_pct": "REAL", "hit": "INTEGER"},
+            "equity": {"venue": "TEXT"},
+            "events": {"venue": "TEXT"},
         }
         for table, cols in want.items():
             have = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
@@ -71,10 +78,25 @@ class Store:
         self.db.execute("INSERT OR REPLACE INTO kv(key,value) VALUES(?,?)", (key, json.dumps(value)))
         self.db.commit()
 
+    # status per market (mis. 'bot_state:forex')
+    def vkey(self, name):
+        return f"{name}:{self.venue}" if self.venue else name
+
+    def vget(self, name, default=None):
+        return self.get_kv(self.vkey(name), default)
+
+    def vset(self, name, value):
+        self.set_kv(self.vkey(name), value)
+
+    def _vfilter(self, q, args):
+        if self.venue:
+            q += f" AND {VCOL}=?"
+            args.append(self.venue)
+        return q, args
+
     # ---------- positions ----------
     def open_positions(self, symbol=None):
-        q = "SELECT * FROM positions WHERE mode=? AND status='open'"
-        args = [self.mode]
+        q, args = self._vfilter("SELECT * FROM positions WHERE mode=? AND status='open'", [self.mode])
         if symbol:
             q += " AND symbol=?"
             args.append(symbol)
@@ -110,9 +132,9 @@ class Store:
 
     def realized_pnl_today(self) -> float:
         today = datetime.now(WIB).strftime("%Y-%m-%d")
-        r = self.db.execute(
-            "SELECT COALESCE(SUM(pnl),0) s FROM positions WHERE mode=? AND status='closed' AND exit_time LIKE ?",
-            (self.mode, today + "%")).fetchone()
+        q, args = self._vfilter("SELECT COALESCE(SUM(pnl),0) s FROM positions WHERE mode=? AND status='closed' "
+                                "AND exit_time LIKE ?", [self.mode, today + "%"])
+        r = self.db.execute(q, args).fetchone()
         return float(r["s"])
 
     # ---------- signals / equity / events ----------
@@ -178,11 +200,11 @@ class Store:
                 "bt_hit": bt_hits / bt_n if bt_n else None, "bt_at": bt.get("at") if bt_n else None}
 
     def add_equity(self, cash, pos_value):
-        self.db.execute("INSERT INTO equity(mode,time,cash,positions_value,equity) VALUES(?,?,?,?,?)",
-                        (self.mode, now_wib(), cash, pos_value, cash + pos_value))
+        self.db.execute("INSERT INTO equity(mode,time,cash,positions_value,equity,venue) VALUES(?,?,?,?,?,?)",
+                        (self.mode, now_wib(), cash, pos_value, cash + pos_value, self.venue))
         self.db.commit()
 
     def event(self, level, message):
-        self.db.execute("INSERT INTO events(mode,time,level,message) VALUES(?,?,?,?)",
-                        (self.mode, now_wib(), level, message))
+        self.db.execute("INSERT INTO events(mode,time,level,message,venue) VALUES(?,?,?,?,?)",
+                        (self.mode, now_wib(), level, message, self.venue))
         self.db.commit()

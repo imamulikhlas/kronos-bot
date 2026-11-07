@@ -1,8 +1,9 @@
 """
 Menjalankan robot trading Kronos (biasanya dinyalakan dari panel).
 
-    python run_bot.py                 # jalan terus (mode sesuai config.yaml)
-    python run_bot.py --once          # satu siklus lalu keluar
+    python run_bot.py --venue crypto  # robot kripto (jalan terus)
+    python run_bot.py --venue forex   # robot forex (jalan terus)
+    python run_bot.py --venue forex --once   # satu siklus lalu keluar
     python run_bot.py --dummy         # uji alur dengan ramalan acak (hanya mode simulasi)
     python run_bot.py --status        # lihat posisi terbuka
     python run_bot.py --tutup-semua   # tutup semua posisi yang dibuka robot
@@ -14,7 +15,7 @@ import signal
 import sys
 import time
 
-from bot.config import live_unlocked, load_config, path_in_root, setup_logging
+from bot.config import live_unlocked, load_config, path_in_root, setup_logging, venue_cfg
 from bot.engine import Engine
 from bot.forecast import make_forecaster
 from bot.store import Store
@@ -38,6 +39,7 @@ def print_status(store, mk):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--venue", choices=["crypto", "forex"], default="crypto", help="market yang dijalankan")
     ap.add_argument("--config", default=None)
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--dummy", action="store_true")
@@ -46,18 +48,19 @@ def main():
     ap.add_argument("--ya", action="store_true", help="lewati konfirmasi mode live")
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
-    log = setup_logging("bot")
+    venue = args.venue
+    cfg = venue_cfg(load_config(args.config), venue)
+    log = setup_logging(f"bot_{venue}")
     live = cfg["mode"] == "live"
     if live and args.dummy:
         raise SystemExit("--dummy tidak boleh dipakai di mode live.")
     if live and not args.status:
-        if not live_unlocked():
+        if not live_unlocked(venue):
             raise SystemExit("Mode live belum dikonfirmasi di panel (halaman Akun).")
         if not args.ya and input("Mode LIVE (uang sungguhan). Ketik SAYA PAHAM RISIKONYA: ").strip().upper() != "SAYA PAHAM RISIKONYA":
             raise SystemExit("Dibatalkan.")
 
-    store = Store(path_in_root(cfg["db_path"]), cfg["mode"])
+    store = Store(path_in_root(cfg["db_path"]), cfg["mode"], venue)
     mk = Markets(cfg, store, live=live)
     if args.status:
         print_status(store, mk)
@@ -70,34 +73,35 @@ def main():
         return
 
     # siapkan koneksi pasar lebih awal agar masalah (mis. MT5 belum login) langsung terlihat
-    for v in mk.venues():
-        try:
-            mk.broker(v)
-        except Exception as e:  # noqa: BLE001
-            log.error("Pasar %s belum siap: %s", v, e)
-            store.event("ERROR", f"Pasar {'forex' if v == 'forex' else 'kripto'} belum siap: {e}")
+    try:
+        mk.broker(venue)
+    except Exception as e:  # noqa: BLE001
+        log.error("Market %s belum siap: %s", venue, e)
+        store.event("ERROR", f"Market belum siap: {e}")
+        if live:
+            return 1
 
-    store.set_kv("bot_state", "memuat model")
+    store.vset("bot_state", "memuat model")
     try:
         engine.fc = make_forecaster(cfg, dummy=args.dummy)
     except Exception as e:  # noqa: BLE001
         log.error("Gagal memuat model AI. Pastikan internet tersambung. Detail: %s", e)
         store.event("ERROR", f"Gagal memuat model AI: {e}")
-        store.set_kv("bot_state", "berhenti")
+        store.vset("bot_state", "berhenti")
         return 1
-    store.event("INFO", f"Robot mulai ({'live' if live else 'simulasi'}{', dummy' if args.dummy else ''})")
+    store.event("INFO", f"Robot {venue} mulai ({'live' if live else 'simulasi'}{', dummy' if args.dummy else ''})")
     log.info("Robot mulai | mode=%s | pasar=%s | tf=%s", cfg["mode"], cfg["symbols"], cfg["timeframe"])
 
     def _term(*_):
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, _term)
 
-    step = engine.tfms(mk.venues()[0]) if mk.venues() else 3600 * 1000
+    step = engine.tfms(venue)
     delay = int(cfg["loop"]["delay_after_close_sec"]) * 1000
     check_ms = int(cfg["loop"]["price_check_sec"]) * 1000
     now_ms = lambda: int(time.time() * 1000)  # noqa: E731
     try:
-        store.set_kv("bot_state", "meramal")
+        store.vset("bot_state", "meramal")
         engine.process_requests()
         engine.candle_cycle()
         if args.once:
@@ -107,12 +111,12 @@ def main():
         log.info("Menunggu candle berikutnya...")
         while True:
             now = now_ms()
-            store.set_kv("heartbeat", now)
-            store.set_kv("next_run", next_run)
-            store.set_kv("bot_state", "berjalan")
+            store.vset("heartbeat", now)
+            store.vset("next_run", next_run)
+            store.vset("bot_state", "berjalan")
             engine.process_requests()
             if now >= next_run:
-                store.set_kv("bot_state", "meramal")
+                store.vset("bot_state", "meramal")
                 engine.candle_cycle()
                 next_run = (now // step + 1) * step + delay
             elif now >= next_check:
@@ -122,7 +126,7 @@ def main():
     except KeyboardInterrupt:
         log.info("Robot dihentikan. Posisi terbuka tetap ada.")
     finally:
-        store.set_kv("bot_state", "berhenti")
+        store.vset("bot_state", "berhenti")
         store.event("INFO", "Robot dihentikan")
 
 

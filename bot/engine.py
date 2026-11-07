@@ -139,7 +139,7 @@ class Engine:
             return float(self.cfg["paper"]["starting_balance"])
 
     def can_open(self, sym, candle_ts):
-        if STOP_FILE.exists() or self.store.get_kv("pause_entries", False):
+        if STOP_FILE.exists() or self.store.vget("pause_entries", False):
             return False, "posisi baru sedang dijeda"
         if len(self.store.open_positions()) >= int(self.r["max_open_positions"]):
             return False, "jumlah posisi maksimal tercapai"
@@ -200,10 +200,10 @@ class Engine:
 
     def process_requests(self):
         """Permintaan dari panel: tutup posisi tertentu / semua."""
-        req = self.store.get_kv("close_requests", [])
+        req = self.store.vget("close_requests", [])
         if not req:
             return
-        self.store.set_kv("close_requests", [])
+        self.store.vset("close_requests", [])
         for pos in self.store.open_positions():
             if "ALL" in req or pos["id"] in req:
                 try:
@@ -225,7 +225,7 @@ class Engine:
         venues = set(self.mk.venues()) | {venue_of(p["symbol"]) for p in openp}
         cash, value = 0.0, 0.0
         if not self.mk.live:
-            cash = self.mk.broker(sorted(venues)[0] if venues else "crypto").cash()
+            cash = self.mk.broker(self.cfg.get("venue") or (sorted(venues)[0] if venues else "crypto")).cash()
             for pos in openp:
                 b = self.mk.broker(venue_of(pos["symbol"]))
                 value += b.value(pos, b.price(pos["symbol"]))

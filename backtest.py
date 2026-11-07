@@ -21,7 +21,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from bot.config import load_config, path_in_root, setup_logging
+from bot.config import load_config, path_in_root, setup_logging, venue_cfg
 from bot.forecast import Signal, build_signal, make_forecaster
 from bot.forex import base_quote, contract_size, round_down
 from bot.strategy import entry_side, exit_levels, price_exit, sgn, signal_exit, strat, trail, venue_of
@@ -338,10 +338,11 @@ def main():
     ap.add_argument("--config", default=None)
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
+    full = load_config(args.config)
     log = setup_logging("backtest")
-    symbol = args.symbol or cfg["symbols"][0]
+    symbol = args.symbol or full["crypto"]["symbols"][0]
     venue = venue_of(symbol)
+    cfg = venue_cfg(full, venue)
     tf = args.tf or cfg["timeframe"]
     cfg["timeframe"] = tf
     s = strat(cfg, venue)
@@ -369,7 +370,7 @@ def main():
     report(symbol, tf, trades, curve, bal, acc, log, tag, skipped)
     if not args.dummy and acc[1]:
         from bot.store import Store
-        Store(path_in_root(cfg["db_path"]), cfg["mode"]).set_backtest_accuracy(symbol, tf, pred_len, acc[0], acc[1])
+        Store(path_in_root(cfg["db_path"]), cfg["mode"], venue).set_backtest_accuracy(symbol, tf, pred_len, acc[0], acc[1])
     if args.optimasi:
         optimize(df, signals, cfg, symbol, s, start, args.every, log, tf, tag)
     log.info("SELESAI")

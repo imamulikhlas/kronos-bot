@@ -1,13 +1,4 @@
 # Diatur dari Panel Kontrol. Boleh juga diedit manual.
-mode: paper
-exchange: tokocrypto
-quote: USDT
-symbols:
-- BTC/USDT
-- ETH/USDT
-- EURUSD
-- XAUUSD
-timeframe: 1h
 model:
   name: NeoQuasar/Kronos-small
   tokenizer: NeoQuasar/Kronos-Tokenizer-base
@@ -17,65 +8,96 @@ model:
   n_paths: 10
   temperature: 1.0
   top_p: 0.9
-strategy:
-  trend_filter: true
-  trend_period: 200
-  rsi_max: 75
-  min_rr: 1.2
-  sl_mode: persen
-  sl_atr_mult: 2.0
-  tp_atr_mult: 4.0
-  trailing_on: true
-  trail_activate_pct: 1.5
-  trail_pct: 1.0
-  max_hold_candles: 24
-  exit_prob_up_below: 0.35
-  cooldown_candles: 2
-  min_accuracy: 0.55
-  min_accuracy_n: 30
-  require_proof: false
-  fee_pct: 0.1
-  min_expected_return_pct: 0.8
-  min_prob_up: 0.65
-  stop_loss_pct: 2.0
-  take_profit_pct: 4.0
-risk:
-  order_size_quote: 15.0
-  max_order_size_quote: 50.0
-  max_open_positions: 3
-  max_daily_loss_quote: 20.0
 paper:
-  starting_balance: 1000.0
   slippage_pct: 0.05
 loop:
   price_check_sec: 60
   delay_after_close_sec: 15
 db_path: data/trader.db
-strategy_forex:
-  trend_filter: true
-  trend_period: 200
-  rsi_max: 75
-  min_rr: 1.2
-  sl_mode: atr
-  sl_atr_mult: 2.0
-  tp_atr_mult: 4.0
-  trailing_on: true
-  trail_activate_pct: 0.3
-  trail_pct: 0.2
-  max_hold_candles: 24
-  exit_prob_up_below: 0.35
-  cooldown_candles: 2
-  min_accuracy: 0.55
-  min_accuracy_n: 30
-  require_proof: false
-  allow_short: true
-  fee_pct: 0.02
-  min_expected_return_pct: 0.1
-  min_prob_up: 0.65
-  stop_loss_pct: 0.4
-  take_profit_pct: 0.8
+crypto:
+  mode: paper
+  exchange: tokocrypto
+  quote: USDT
+  symbols:
+  - BTC/USDT
+  - ETH/USDT
+  watchlist:
+  - BTC/USDT
+  - ETH/USDT
+  - SOL/USDT
+  - BNB/USDT
+  - XRP/USDT
+  - DOGE/USDT
+  timeframe: 1h
+  strategy:
+    trend_filter: true
+    trend_period: 200
+    rsi_max: 75
+    min_rr: 1.2
+    sl_mode: persen
+    sl_atr_mult: 2.0
+    tp_atr_mult: 4.0
+    trailing_on: true
+    trail_activate_pct: 1.5
+    trail_pct: 1.0
+    max_hold_candles: 24
+    exit_prob_up_below: 0.35
+    cooldown_candles: 2
+    min_accuracy: 0.55
+    min_accuracy_n: 30
+    require_proof: false
+    fee_pct: 0.1
+    min_expected_return_pct: 0.8
+    min_prob_up: 0.65
+    stop_loss_pct: 2.0
+    take_profit_pct: 4.0
+  paper_balance: 1000.0
+  risk:
+    order_size_quote: 15.0
+    max_order_size_quote: 50.0
+    max_open_positions: 3
+    max_daily_loss_quote: 20.0
 forex:
+  mode: paper
   source: auto
-  leverage: 100
-  risk_pct: 1.0
-  max_lots: 1.0
+  symbols:
+  - EURUSD
+  - XAUUSD
+  watchlist:
+  - EURUSD
+  - GBPUSD
+  - USDJPY
+  - AUDUSD
+  - USDCAD
+  - XAUUSD
+  timeframe: 1h
+  strategy:
+    trend_filter: true
+    trend_period: 200
+    rsi_max: 75
+    min_rr: 1.2
+    sl_mode: atr
+    sl_atr_mult: 2.0
+    tp_atr_mult: 4.0
+    trailing_on: true
+    trail_activate_pct: 0.3
+    trail_pct: 0.2
+    max_hold_candles: 24
+    exit_prob_up_below: 0.35
+    cooldown_candles: 2
+    min_accuracy: 0.55
+    min_accuracy_n: 30
+    require_proof: false
+    allow_short: true
+    fee_pct: 0.02
+    min_expected_return_pct: 0.1
+    min_prob_up: 0.65
+    stop_loss_pct: 0.4
+    take_profit_pct: 0.8
+  paper_balance: 1000.0
+  risk:
+    risk_pct: 1.0
+    max_lots: 1.0
+    leverage: 100
+    max_open_positions: 3
+    max_daily_loss_quote: 20.0

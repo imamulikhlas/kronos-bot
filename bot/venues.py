@@ -61,6 +61,8 @@ class Markets:
         return venue_of(symbol)
 
     def venues(self):
+        if self.cfg.get("venue"):
+            return [self.cfg["venue"]]
         return sorted({venue_of(s) for s in self.cfg["symbols"]})
 
     def strat(self, venue):

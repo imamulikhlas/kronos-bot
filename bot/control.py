@@ -12,9 +12,7 @@ from .config import ROOT
 
 DATA = ROOT / "data"
 LOGS = ROOT / "logs"
-BOT_PID = DATA / "bot.pid"
 BT_PID = DATA / "backtest.pid"
-BOT_CONSOLE = LOGS / "bot_console.log"
 BT_LOG = LOGS / "backtest_console.log"
 
 
@@ -63,33 +61,58 @@ def _stop(pid_file: Path):
     pid_file.unlink(missing_ok=True)
 
 
-# ---------------- robot ----------------
-def bot_running() -> bool:
-    return _alive(BOT_PID, "run_bot.py")
+# ---------------- robot (satu proses per market) ----------------
+def bot_pid(venue: str) -> Path:
+    return DATA / f"bot_{venue}.pid"
 
 
-def bot_crashed() -> bool:
+def bot_console(venue: str) -> Path:
+    return LOGS / f"bot_{venue}_console.log"
+
+
+def _alive_bot(venue: str) -> bool:
+    try:
+        pid = int(bot_pid(venue).read_text().strip())
+        p = psutil.Process(pid)
+        cmd = " ".join(p.cmdline())
+        return p.is_running() and p.status() != psutil.STATUS_ZOMBIE and "run_bot.py" in cmd and venue in cmd
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def bot_running(venue: str) -> bool:
+    return _alive_bot(venue)
+
+
+def bot_crashed(venue: str) -> bool:
     """PID tercatat tetapi prosesnya sudah mati (bukan dihentikan dari panel)."""
-    return BOT_PID.exists() and not bot_running()
+    return bot_pid(venue).exists() and not bot_running(venue)
 
 
-def start_bot():
-    if bot_running():
+def start_bot(venue: str):
+    if bot_running(venue):
         return
     LOGS.mkdir(parents=True, exist_ok=True)
-    with open(BOT_CONSOLE, "a", encoding="utf-8") as f:
-        f.write(f"\n===== Robot dinyalakan {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
-    _spawn(["run_bot.py", "--ya"], BOT_PID, BOT_CONSOLE)
+    with open(bot_console(venue), "a", encoding="utf-8") as f:
+        f.write(f"\n===== Robot {venue} dinyalakan {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+    _spawn(["run_bot.py", "--venue", venue, "--ya"], bot_pid(venue), bot_console(venue))
 
 
-def stop_bot():
-    _stop(BOT_PID)
+def stop_bot(venue: str):
+    _stop(bot_pid(venue))
 
 
-def restart_bot():
-    stop_bot()
+def restart_bot(venue: str):
+    stop_bot(venue)
     time.sleep(1)
-    start_bot()
+    start_bot(venue)
+
+
+def restart_if_running(venue: str) -> bool:
+    if bot_running(venue):
+        restart_bot(venue)
+        return True
+    return False
 
 
 # ---------------- uji strategi ----------------
