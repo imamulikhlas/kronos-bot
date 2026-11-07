@@ -159,8 +159,13 @@ Kalau hasilnya "No reliable setting", berarti AI belum punya keunggulan nyata di
 
 ### Memori
 
-- **Cancel** di panel Activity menghentikan pekerjaan setelah potongan yang sedang dihitung selesai (biasanya beberapa detik), lalu melepas model AI dari memori.
-- Model AI di panel juga dilepas otomatis setelah 10 menit tidak dipakai, atau lewat tombol **Free memory**.
+Model AI untuk panel (Chart, Scanner, Past forecasts, Tune) berjalan di **proses terpisah**. Di Windows, PyTorch tidak mengembalikan memori walaupun model sudah dilepas di dalam program. Dengan menutup prosesnya, memori pasti kembali ke komputer.
+
+- **Cancel** langsung menghentikan proses AI. Tidak perlu menunggu.
+- **Free memory** di panel Activity menutup proses AI panel.
+- Proses AI panel juga ditutup otomatis setelah 10 menit tidak dipakai.
+- Server panel sendiri tidak memuat PyTorch, jadi hanya memakai sekitar 200 MB.
+- Robot dan backtest memuat model AI masing-masing. Memorinya kembali begitu robot di-Stop atau backtest selesai.
 
 ### Ramalan ensemble
 

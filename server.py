@@ -8,7 +8,6 @@ Endpoint per market berbentuk /api/{venue}/... dengan venue = crypto | forex.
 """
 import json
 import os
-import sys
 import socket
 import sqlite3
 import threading
@@ -151,8 +150,12 @@ def cached(key, ttl, fn):
     if hit and time.time() - hit[0] < ttl:
         return hit[1]
     val = fn()
+    now = time.time()
     with _ttl_lock:
-        _ttl[key] = (time.time(), val)
+        _ttl[key] = (now, val)
+        if len(_ttl) > 150:                       # buang data lama supaya memori server tidak terus bertambah
+            for k in [k for k, (t, _) in _ttl.items() if now - t > 300]:
+                _ttl.pop(k, None)
     return val
 
 
@@ -689,24 +692,20 @@ _forecaster = {"obj": None, "key": None, "last": 0.0, "unload": False}
 
 
 def _free_model():
-    """Lepas model AI panel dari memori (dipanggil sambil memegang _fc_lock)."""
-    import gc
-    had = _forecaster["obj"] is not None
+    """Tutup proses AI panel (dipanggil sambil memegang _fc_lock). Memorinya pasti kembali ke sistem."""
+    obj = _forecaster["obj"]
     _forecaster.update(obj=None, key=None, unload=False)
-    gc.collect()
-    if "torch" in sys.modules:
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:  # noqa: BLE001
-            pass
-    try:                                          # Linux: kembalikan memori bebas ke sistem
-        import ctypes
-        ctypes.CDLL("libc.so.6").malloc_trim(0)
-    except Exception:  # noqa: BLE001
-        pass
-    return had
+    if obj is not None:
+        obj.close()
+    return obj is not None
+
+
+def kill_model():
+    """Cancel: hentikan proses AI seketika, tanpa menunggu potongan hitungan selesai."""
+    obj = _forecaster["obj"]
+    _forecaster.update(obj=None, key=None, unload=False)
+    if obj is not None:
+        obj.kill()
 
 
 def unload_model() -> bool:
@@ -733,11 +732,16 @@ threading.Thread(target=_idle_unloader, daemon=True).start()
 
 
 def get_forecaster(m):
-    """Model AI bersama untuk panel (panggil di dalam _fc_lock)."""
-    from bot.forecast import KronosForecaster
-    key = (m["name"], m["tokenizer"], m["n_paths"], m.get("device", "auto"), bool(m.get("ensemble")))
-    if _forecaster["key"] != key:
-        _forecaster["obj"] = KronosForecaster({**m, "device": m.get("device", "auto")})
+    """Model AI bersama untuk panel, di proses terpisah (panggil di dalam _fc_lock)."""
+    from bot.ai_worker import RemoteForecaster
+    key = (m["name"], m["tokenizer"], m["n_paths"], m.get("device", "auto"), bool(m.get("ensemble")),
+           int(m["lookback"]), float(m.get("temperature", 1.0)))
+    obj = _forecaster["obj"]
+    if obj is None or _forecaster["key"] != key or not obj.alive():
+        if obj is not None:
+            obj.close()
+        _forecaster.update(obj=None, key=None)
+        _forecaster["obj"] = RemoteForecaster({**m, "device": m.get("device", "auto")})
         _forecaster["key"] = key
     return _forecaster["obj"]
 
@@ -824,6 +828,8 @@ def new_job(kind: str, label: str, venue: str | None = None, total: int = 0, hea
 
 def end_job(job: dict, error: str = ""):
     job.update(finished=True, ended=time.time(), waiting=False)
+    if job.get("cancel"):
+        job["error"] = "Dibatalkan."
     if error and not job.get("error"):
         job["error"] = error
 
@@ -883,7 +889,6 @@ def tune_get(symbol: str, tf: str):
 def _tune_tf(job, symbol, tf, m, points, data, configs):
     """Satu timeframe: ramal di titik-titik lampau untuk tiap setelan, catat benar/salah per jarak & ambang yakin,
     terpisah untuk paruh awal (memilih) dan paruh akhir (menguji)."""
-    from bot.forecast import default_batch
     H = int(m["pred_len"])
     gap = max(2, H // 2)
     need_lb = max(c["lookback"] for c in configs)
@@ -898,7 +903,7 @@ def _tune_tf(job, symbol, tf, m, points, data, configs):
     stats = {}
     fc = get_forecaster(m)
     base_cfg = dict(fc.cfg)
-    bs = default_batch(getattr(fc, "device", "cpu"))
+    bs = fc.batch
     try:
         for ci, cfg_i in enumerate(configs):
             fc.cfg = {**base_cfg, "temperature": cfg_i["temperature"], "ensemble": False}
@@ -1138,7 +1143,6 @@ def hindcast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True
 
     def work():
         import backtest as bt
-        from bot.forecast import default_batch
         try:
             venue = venue_of(symbol)
             c = vcfg(venue)
@@ -1176,7 +1180,7 @@ def hindcast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True
                 with ai_slot(job):
                     job["phase"] = "AI meramal ulang"
                     fc = get_forecaster(m)
-                    bs = default_batch(getattr(fc, "device", "cpu"))
+                    bs = fc.batch
                     for i in range(0, len(todo), bs):
                         check_cancel(job)
                         chunk = todo[i:i + bs]
@@ -1300,6 +1304,23 @@ def _pid(path):
         return None
 
 
+def _nvidia_stats():
+    """Pemakaian GPU NVIDIA lewat nvidia-smi (tanpa memuat PyTorch di server)."""
+    import shutil
+    import subprocess
+    if not shutil.which("nvidia-smi"):
+        return None
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.used,memory.total,utilization.gpu",
+                              "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=5,
+                             creationflags=0x08000000 if os.name == "nt" else 0).stdout.strip().splitlines()
+        name, used, total, util = [x.strip() for x in out[0].split(",")]
+        return {"name": name, "pct": round(float(used) / float(total) * 100), "util": float(util),
+                "used_gb": round(float(used) / 1024, 1), "total_gb": round(float(total) / 1024, 1)}
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @app.get("/api/activity")
 def activity():
     """Semua proses yang sedang jalan + pemakaian CPU/RAM/GPU + peringatan beban."""
@@ -1308,6 +1329,8 @@ def activity():
     items = []
     c = full_cfg()
     pids = {"Panel": os.getpid()}
+    if _forecaster.get("obj") is not None and _forecaster["obj"].alive():
+        pids["AI di panel"] = _forecaster["obj"].pid
     for v in VENUES:
         if ctl.bot_running(v):
             stv = store(v)
@@ -1358,22 +1381,16 @@ def activity():
     for name, pid in pids.items():
         try:
             p = psutil.Process(pid)
-            mem = p.memory_info().rss + sum(ch.memory_info().rss for ch in p.children(recursive=True) if ch.is_running())
+            mem = p.memory_info().rss
+            if name != "Panel":                   # proses lain dihitung bersama anak prosesnya
+                mem += sum(ch.memory_info().rss for ch in p.children(recursive=True) if ch.is_running())
             procs.append({"name": name, "mem_gb": round(mem / 1024 ** 3, 2)})
         except Exception:  # noqa: BLE001
             continue
     res = {"cpu": psutil.cpu_percent(interval=None), "ram_pct": vm.percent,
            "ram_used_gb": round((vm.total - vm.available) / 1024 ** 3, 1), "ram_total_gb": round(vm.total / 1024 ** 3, 1),
            "procs": procs, "gpu": None}
-    if "torch" in sys.modules:
-        try:
-            import torch
-            if torch.cuda.is_available():
-                free, total = torch.cuda.mem_get_info()
-                res["gpu"] = {"name": torch.cuda.get_device_name(0), "pct": round((1 - free / total) * 100),
-                              "used_gb": round((total - free) / 1024 ** 3, 1), "total_gb": round(total / 1024 ** 3, 1)}
-        except Exception:  # noqa: BLE001
-            pass
+    res["gpu"] = cached(("nvidia-smi",), 5, _nvidia_stats)
     models = (1 if _forecaster.get("obj") is not None else 0) + sum(1 for i in items if i["kind"] == "bot" and not i.get("error")) \
         + (1 if any(i["kind"] == "backtest" for i in items) else 0)
     warnings = []
@@ -1419,8 +1436,8 @@ def activity_cancel(id: str = Body(..., embed=True)):
     if not j:
         fail("Proses tidak ditemukan.", 404)
     j["cancel"] = True
-    if not j.get("finished"):
-        _forecaster["unload"] = True              # lepas memori model begitu potongan yang sedang dihitung selesai
+    if not j.get("finished") and not j.get("waiting") and _fc_lock.locked():
+        kill_model()                              # sedang dihitung: hentikan proses AI seketika
     for v in VENUES:
         if _scanner[v].get("job") == id:
             _scanner[v]["cancel"] = True
@@ -1499,7 +1516,6 @@ def scanner_start(venue: str, tf: str = Body("1h", embed=True), universe: str = 
             rows.sort(key=lambda r: r["tech_detail"]["tech"], reverse=True)
             device = None
             if ai_top and rows:
-                from bot.forecast import default_batch
                 pick = [r for r in rows[:ai_top] if len(hists[r["symbol"]]) >= int(m["lookback"])]
                 st.update(phase="AI meramal kandidat teratas", done=0, total=len(pick))
                 items = []
@@ -1510,7 +1526,7 @@ def scanner_start(venue: str, tf: str = Body("1h", embed=True), universe: str = 
                 with ai_slot(job):
                     fc = get_forecaster(m)
                     device = getattr(fc, "device_name", None)
-                    bs = default_batch(getattr(fc, "device", "cpu"))
+                    bs = fc.batch
                     for i in range(0, len(items), bs):
                         sync()
                         chunk = items[i:i + bs]
@@ -1541,7 +1557,7 @@ def scanner_start(venue: str, tf: str = Body("1h", embed=True), universe: str = 
         except Cancelled:
             st["error"] = "Scan dibatalkan."
         except Exception as e:  # noqa: BLE001
-            st["error"] = str(e)
+            st["error"] = "Scan dibatalkan." if st.get("cancel") else str(e)
         finally:
             st.update(running=False, phase="")
             end_job(job, st.get("error", ""))
@@ -1609,12 +1625,22 @@ def history(venue: str, mode: str | None = None):
 _sys = {"t": 0, "v": None}
 
 
+def _system_info(refresh=False):
+    """Info perangkat dibaca di proses sementara (server tidak perlu memuat PyTorch). Disimpan 10 menit."""
+    if refresh or _sys["v"] is None or time.time() - _sys["t"] > 600:
+        from bot.ai_worker import system_info_subprocess
+        try:
+            _sys["v"] = system_info_subprocess()
+        except Exception as e:  # noqa: BLE001
+            _sys["v"] = {"best": "cpu", "gpu": None, "os_gpus": [], "error": str(e), "threads": os.cpu_count()}
+        _sys["t"] = time.time()
+    return _sys["v"]
+
+
 @app.get("/api/system")
-def system():
+def system(refresh: bool = False):
     """Perangkat komputasi (GPU/CPU) dan kecepatan backtest terakhir per perangkat."""
-    if time.time() - _sys["t"] > 60 or _sys["v"] is None:
-        from bot.forecast import system_info
-        _sys["v"], _sys["t"] = system_info(), time.time()
+    _system_info(refresh)
     speeds = {}
     if BT_DIR.exists():
         for f in sorted(BT_DIR.glob("*_meta.json"), key=lambda p: p.stat().st_mtime):
@@ -1651,7 +1677,7 @@ def benchmark():
     held = {}
 
     def work():
-        from bot.forecast import KronosForecaster, default_batch, gpu_candidates
+        from bot.ai_worker import RemoteForecaster
         try:
             m = full_cfg()["model"]
             lb, h = int(m["lookback"]), int(m["pred_len"])
@@ -1661,7 +1687,8 @@ def benchmark():
             hist = pd.DataFrame({"timestamps": ts, "open": c, "high": c * 1.002, "low": c * 0.998, "close": c,
                                  "volume": 100.0, "amount": c * 100})
             y = pd.Series(pd.date_range(ts[-1] + pd.Timedelta(hours=1), periods=h, freq="h"))
-            devs = ["cpu"] + [str(d) for d in gpu_candidates()]
+            info = _system_info()
+            devs = ["cpu"] + (["gpu"] if info.get("best", "cpu") != "cpu" else [])
             job["total"] = len(devs)
             rows = []
             slot = ai_slot(job)
@@ -1672,16 +1699,17 @@ def benchmark():
                 job["current"] = d
                 try:
                     t0 = time.time()
-                    fc = KronosForecaster(m, d)
+                    fc = RemoteForecaster(m, d)
+                    held.setdefault("open", []).append(fc)
                     load = time.time() - t0
-                    bs = default_batch(fc.device)
+                    bs = fc.batch
                     fc.paths_many([(hist, y)])                      # pemanasan
                     t1 = time.time()
                     fc.paths_many([(hist, y)] * bs)
                     spp = (time.time() - t1) / bs
                     rows.append({"device": fc.device_name, "kind": "cpu" if d == "cpu" else "gpu", "ok": d == "cpu" or fc.kind != "cpu",
                                  "sec_per_point": spp, "batch": bs, "load_sec": load})
-                    del fc
+                    fc.close()
                 except Exception as e:  # noqa: BLE001
                     rows.append({"device": d, "kind": "gpu", "ok": False, "error": str(e).splitlines()[0][:300]})
                 job["done"] += 1
@@ -1697,6 +1725,8 @@ def benchmark():
         except Exception as e:  # noqa: BLE001
             job["error"] = str(e)
         finally:
+            for f in held.get("open", []):
+                f.close()
             if held.get("slot"):
                 held["slot"].__exit__(None, None, None)
             end_job(job)

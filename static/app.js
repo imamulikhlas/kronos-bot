@@ -1,7 +1,7 @@
 /* kronos — panel trading (vanilla JS, tanpa build)
    Struktur: pilih market (crypto / forex) -> Overview · Markets · Chart · Backtest · Settings. Account global. */
 "use strict";
-const APP_VERSION = "2026.11.08.3";   // harus sama dengan bot/version.py
+const APP_VERSION = "2026.11.08.4";   // harus sama dengan bot/version.py
 
 /* ===================================================================== utilitas */
 const $ = (s, el = document) => el.querySelector(s);
@@ -1691,7 +1691,7 @@ function renderDock() {
       <div class="dock-head"><h3>Activity</h3><button class="icon-btn sm" id="dockClose" aria-label="Tutup">✕</button></div>
       ${r ? `<div class="meters">${meter("CPU", r.cpu)}${meter("RAM", r.ram_pct, `${nf(r.ram_used_gb, 1)} / ${nf(r.ram_total_gb, 0)} GB`)}${r.gpu ? meter("GPU", r.gpu.pct, `${nf(r.gpu.used_gb, 1)} / ${nf(r.gpu.total_gb, 0)} GB`) : ""}</div>` : `<p class="faint small">Tidak tersambung ke server.</p>`}
       ${(d?.warnings || []).map((w) => `<div class="notice ${w.level === "err" ? "err" : "warn"}">${esc(w.text)}</div>`).join("")}
-      ${r?.panel_model ? `<div class="pm"><div><b>Model AI di panel</b> ${esc(r.panel_model.name)}<br><span class="faint small">${r.panel_model.unload_pending ? "akan dilepas setelah pekerjaan ini selesai" : r.panel_model.in_use ? "sedang dipakai" : `menganggur ${ago(Date.now() / 1000 - (r.panel_model.idle_sec || 0))}, dilepas otomatis setelah 10 menit`}</span></div>
+      ${r?.panel_model ? `<div class="pm"><div><b>Proses AI panel</b> ${esc(r.panel_model.name)}${(r.procs || []).find((p) => p.name === "AI di panel") ? ` · ${nf(r.procs.find((p) => p.name === "AI di panel").mem_gb, 1)} GB` : ""}<br><span class="faint small">${r.panel_model.unload_pending ? "akan dilepas setelah pekerjaan ini selesai" : r.panel_model.in_use ? "sedang dipakai" : `menganggur ${ago(Date.now() / 1000 - (r.panel_model.idle_sec || 0))}, dilepas otomatis setelah 10 menit`}</span></div>
         <button class="btn xs" id="dockFree" ${r.panel_model.unload_pending ? "disabled" : ""}>Free memory</button></div>` : ""}
       <div class="dock-list">${items.length ? items.map((i) => `
         <div class="ditem ${i.error ? "bad" : ""} ${i.finished && !i.error ? "done" : ""}">
@@ -1704,7 +1704,7 @@ function renderDock() {
           <div class="acts">${i.link ? `<a class="btn ghost xs" href="${i.link === "backtest" ? `#/${M || "crypto"}/backtest` : i.link}" data-close>Open</a>` : ""}${i.cancel ? `<button class="btn ghost xs danger-t" data-cancel="${esc(i.id)}" data-label="${esc(i.label)}" data-kind="${i.cancel}">${i.cancel === "stop" ? "Stop" : "Cancel"}</button>` : ""}</div>
         </div>`).join("") : `<div class="empty" style="padding:14px 8px"><b>Tidak ada proses yang berjalan</b>Robot, backtest, scanner, dan ramalan akan muncul di sini.</div>`}</div>
       ${r?.procs?.length ? `<details class="dock-more" ${DOCK.more ? "open" : ""}><summary>Memori per proses${d.models ? ` · ${d.models} model AI dimuat` : ""}</summary><ul>${r.procs.map((p) => `<li><span>${esc(p.name)}</span><b>${nf(p.mem_gb, 2)} GB</b></li>`).join("")}</ul></details>` : ""}
-      <p class="faint small dock-tip">Tiap robot dan backtest memuat model AI sendiri. Kalau komputer terasa berat, jalankan satu pekerjaan besar dalam satu waktu. Ramalan dari panel diantre otomatis.</p>
+      <p class="faint small dock-tip">Tiap robot, backtest, dan proses AI panel memuat model AI sendiri, dan memorinya kembali begitu proses itu berhenti. Kalau komputer terasa berat, jalankan satu pekerjaan besar dalam satu waktu. Ramalan dari panel diantre otomatis.</p>
     </section>`;
   }
   const prevScroll = $("#dockPanel")?.scrollTop || 0;
@@ -1716,13 +1716,13 @@ function renderDock() {
   $("#dockClose")?.addEventListener("click", () => { DOCK.open = false; store.set("kronos-dock-open", false); renderDock(); });
   $$("[data-close]", el).forEach((a) => a.addEventListener("click", () => { if (matchMedia("(max-width: 860px)").matches) { DOCK.open = false; renderDock(); } }));
   $("#dockFree")?.addEventListener("click", async () => {
-    try { const r = await api("/api/activity/free", {}); toast(r.now ? "Model AI dilepas dari memori." : "Model dilepas begitu pekerjaan AI yang berjalan selesai."); pollActivity(); }
+    try { const r = await api("/api/activity/free", {}); toast(r.now ? "Proses AI ditutup, memorinya sudah kembali ke komputer." : "Proses AI ditutup begitu pekerjaan yang berjalan selesai."); pollActivity(); }
     catch (e) { toast(e.message, "err"); }
   });
   $$("[data-cancel]", el).forEach((b) => b.onclick = async () => {
     const stop = b.dataset.kind === "stop";
     const ok = await modal({ title: `${stop ? "Stop" : "Cancel"} ${b.dataset.label}?`, danger: true, confirm: stop ? "Stop" : "Cancel it", cancel: "Keep running",
-      body: stop ? "<p>Robot berhenti. Posisi yang masih terbuka <b>tidak ikut ditutup</b> dan tidak dijaga robot.</p>" : "<p>Proses dihentikan setelah potongan yang sedang dihitung selesai (biasanya beberapa detik), lalu model AI dilepas dari memori. Hasil yang sudah selesai tetap tersimpan.</p>" });
+      body: stop ? "<p>Robot berhenti. Posisi yang masih terbuka <b>tidak ikut ditutup</b> dan tidak dijaga robot.</p>" : "<p>Proses langsung dihentikan dan memori AI-nya dikembalikan ke komputer. Hasil yang sudah selesai tetap tersimpan.</p>" });
     if (!ok) return;
     try { await api("/api/activity/cancel", { id: b.dataset.cancel }); toast(stop ? "Robot dihentikan." : "Dibatalkan."); pollActivity(); refreshStatus(); }
     catch (e) { toast(e.message, "err"); }
