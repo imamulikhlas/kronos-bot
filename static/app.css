@@ -74,7 +74,8 @@ svg { flex: none; }
 .icon-btn { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; border: var(--edge); background: var(--card); cursor: pointer; }
 .icon-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
 .sub-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 28px; max-width: 1320px; margin: 0 auto; }
-.subnav { display: flex; gap: 2px; }
+.subnav { display: flex; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.subnav::-webkit-scrollbar { display: none; }
 .subnav a { display: flex; align-items: center; gap: 7px; padding: 9px 14px 11px; text-decoration: none; color: var(--ink-2); font-weight: 500; font-size: 14.5px; border-bottom: 2px solid transparent; cursor: pointer; }
 .subnav a svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .subnav a:hover { color: var(--ink); }
@@ -526,9 +527,9 @@ details.how { margin-top: 16px; } details.how summary { cursor: pointer; } detai
   .head h1 { font-size: 28px; }
   .autopanel { grid-template-columns: 1fr; padding: 20px; margin-right: 4px; box-shadow: 4px 4px 0 var(--ink); }
   .autopanel .actions { min-width: 0; }
-  .halves, .choose-grid, .steps, .modecards, .lab, .devices, .picks, .track { grid-template-columns: 1fr; }
+  .halves, .choose-grid, .steps, .modecards, .lab, .devices, .picks, .track { grid-template-columns: minmax(0, 1fr); }
   .subnav a { font-size: 10px; }
-  .lab-row { grid-template-columns: 1fr; gap: 8px; } .lab-row > .k { padding-top: 0; }
+  .lab-row { grid-template-columns: minmax(0, 1fr); gap: 8px; } .lab-row > .k { padding-top: 0; }
   .estimate { position: static; }
   .mgrid { grid-template-columns: 1fr 1fr; } .mgrid div:nth-child(4n) { border-right: 1px solid var(--line); } .mgrid div:nth-child(2n) { border-right: 0; } .mgrid div:nth-last-child(-n+4) { border-bottom: 1px solid var(--line); } .mgrid div:nth-last-child(-n+2) { border-bottom: 0; }
   .verdict { grid-template-columns: 1fr; } .gbadge.xl { width: 72px; height: 72px; font-size: 44px; }
@@ -542,3 +543,4 @@ details.how { margin-top: 16px; } details.how summary { cursor: pointer; } detai
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 @media (max-width: 520px) { .clock { display: none; } }
+@media (max-width: 1000px) { .bot-pill { display: none; } }
