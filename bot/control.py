@@ -16,6 +16,11 @@ BT_PID = DATA / "backtest.pid"
 BT_LOG = LOGS / "backtest_console.log"
 
 
+
+def _wib_now():
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=7))).strftime("%Y-%m-%d %H:%M:%S")
+
 def _env():
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
@@ -94,7 +99,7 @@ def start_bot(venue: str):
         return
     LOGS.mkdir(parents=True, exist_ok=True)
     with open(bot_console(venue), "a", encoding="utf-8") as f:
-        f.write(f"\n===== Robot {venue} dinyalakan {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+        f.write(f"\n===== Robot {venue} dinyalakan {_wib_now()} WIB =====\n")
     _spawn(["run_bot.py", "--venue", venue, "--ya"], bot_pid(venue), bot_console(venue))
 
 

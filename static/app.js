@@ -27,7 +27,12 @@ function sMoney(v) { return v == null || isNaN(v) ? "–" : `${v >= 0 ? "+" : "�
 function pct(v, d = 2) { return v == null || isNaN(v) ? "–" : `${v >= 0 ? "+" : "−"}${nf(Math.abs(v), d)}%`; }
 function p0(v) { return v == null || isNaN(v) ? "–" : `${Math.round(v * 100)}%`; }
 function tone(v) { return v == null || isNaN(v) ? "" : v >= 0 ? "up" : "down"; }
-function hhmm(ms) { return new Date(ms).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }); }
+/* semua jam ditampilkan dalam WIB, apa pun zona waktu komputernya */
+const WIB_TZ = "Asia/Jakarta";
+function hhmm(ms, sec = false) { return new Date(ms).toLocaleTimeString("id-ID", { timeZone: WIB_TZ, hour: "2-digit", minute: "2-digit", ...(sec ? { second: "2-digit" } : {}) }); }
+function wibDateTime(ms) { return new Date(ms).toLocaleString("id-ID", { timeZone: WIB_TZ, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); }
+function wibDay(ms) { return new Date(ms + 7 * 3600000).toISOString().slice(0, 10); }
+const nowWibSec = () => Date.now() / 1000 + 7 * 3600;   // detik "WIB sebagai UTC", sama dengan sumbu waktu grafik
 function labelOf(sym) { if (!isFx(sym)) return sym; const c = String(sym).toUpperCase().replace(/[^A-Z]/g, ""); return `${c.slice(0, 3)}/${c.slice(3, 6)}`; }
 function pair(label) { const [b, q] = String(label).split("/"); return `<span class="pair">${esc(b)}<small>/${esc(q || "")}</small></span>`; }
 function sideTag(side) { return side === "short" ? `<span class="tag short">Sell</span>` : `<span class="tag long">Buy</span>`; }
@@ -577,7 +582,7 @@ PAGES.scanner = async (view) => {
     const hrs = (h) => { const x = (h * TF_SEC[res.tf]) / 3600; return x >= 24 ? `${nf(x / 24, x % 24 ? 1 : 0)} hari` : `${nf(x, 0)} jam`; };
     out.innerHTML = `
       <div class="scan-meta">
-        <span>Scanned <b>${res.scanned}</b> ${fx ? "pairs" : "coins"} · <b>${res.ai_checked}</b> checked by AI · ${TF[res.tf]} · ${new Date(res.time).toLocaleString("id-ID", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} · ${nf(res.seconds, 0)} detik${res.device ? ` · ${esc(res.device)}` : ""}</span>
+        <span>Scanned <b>${res.scanned}</b> ${fx ? "pairs" : "coins"} · <b>${res.ai_checked}</b> checked by AI · ${TF[res.tf]} · ${wibDateTime(res.time)} WIB · ${nf(res.seconds, 0)} detik${res.device ? ` · ${esc(res.device)}` : ""}</span>
         <span class="toolbar">${fx ? `<span id="sSide"></span>` : ""}<label class="check"><input type="checkbox" id="hideW" ${P.hideWatch ? "checked" : ""}><span class="box"></span><span class="t"><b>Hide my watchlist</b></span></label></span>
       </div>
       ${res.tf !== P.tf ? `<div class="notice warn" style="margin-bottom:14px">Hasil ini untuk timeframe ${TF[res.tf]}. Tekan Scan market untuk ${TF[P.tf]}.</div>` : ""}
@@ -679,7 +684,7 @@ PAGES.chart = async (view, query) => {
     </div>
     <div class="grid split">
       <section class="card">
-        <div class="price-line"><span id="phSym" style="font-size:18px"></span><span class="px" id="phPx">–</span><span id="phChg"></span><span class="faint small" id="phTime" style="margin-left:auto"></span></div>
+        <div class="price-line"><span id="phSym" style="font-size:18px"></span><span class="px" id="phPx">–</span><span id="phChg"></span><span class="cdown" id="cdown"></span><span class="faint small" id="phTime" style="margin-left:auto"></span></div>
         <div class="chart" id="mainChart"></div><div class="chart rsi" id="rsiChart"></div>
         <div class="legend"><span><i style="background:var(--acc-text)"></i>AI forecast</span><span><i style="background:repeating-linear-gradient(90deg,var(--acc-text) 0 4px,transparent 4px 7px);opacity:.7"></i>forecast range</span><span><i style="background:var(--ink-3)"></i>EMA 50</span><span><i style="background:var(--ink)"></i>EMA 200 (trend)</span><span><i style="background:var(--ink-2);height:2px"></i>RSI</span></div>
       </section>
@@ -716,7 +721,7 @@ PAGES.chart = async (view, query) => {
   const drawForecast = () => {
     const s = A.tt ? A.tt.signal : A.signal;
     if (!s || !s.path?.length) { [C.hi, C.lo, C.fc].forEach((x) => x.setData([])); return; }
-    const t = (i) => s.t0 + step * i;
+    const t = (i) => (i === 0 ? s.t0 : s.path_times?.[i - 1] ?? s.t0 + step * i);
     const line = (arr) => [{ time: t(0), value: s.last_close }, ...arr.map((v, i) => ({ time: t(i + 1), value: v }))];
     C.fc.setData(line(s.path));
     if (s.path_hi?.length) { C.hi.setData(line(s.path_hi)); C.lo.setData(line(s.path_lo)); } else { C.hi.setData([]); C.lo.setData([]); }
@@ -734,7 +739,7 @@ PAGES.chart = async (view, query) => {
     h.points.forEach((p) => {
       const col = !p.complete ? acc : p.hit ? up : down;
       const ser = C.main.addLineSeries({ color: col, lineWidth: 3, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-      ser.setData([{ time: p.t0, value: p.last_close }, ...p.path.map((v, i) => ({ time: p.t0 + h.step * (i + 1), value: v }))]);
+      ser.setData([{ time: p.t0, value: p.last_close }, ...p.path.map((v, i) => ({ time: p.path_times?.[i] ?? p.t0 + h.step * (i + 1), value: v }))]);
       A.histSeries.push(ser);
       if (p.complete) marks.push({ time: p.t0, position: p.exp_ret_pct >= 0 ? "belowBar" : "aboveBar", color: col, shape: p.exp_ret_pct >= 0 ? "arrowUp" : "arrowDown", text: p.hit ? "✓" : "✕" });
     });
@@ -797,7 +802,8 @@ PAGES.chart = async (view, query) => {
       $("#phPx").textContent = price(d.last, A.sym);
       $("#phChg").innerHTML = `<span class="${tone(chg)}">${pct(chg)}</span> <span class="faint small">this candle</span>`;
       const src = { mt5: "MetaTrader 5", yahoo: "Yahoo Finance", tokocrypto: "Tokocrypto" }[d.source] || d.source;
-      $("#phTime").textContent = `${src} · ${new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
+      $("#phTime").textContent = `${src} · diperbarui ${hhmm(Date.now(), true)} WIB`;
+      A.lastOpen = d.candles.length ? d.candles[d.candles.length - 1].time : null;
     } catch (e) { if ($("#phTime")) $("#phTime").innerHTML = `<span class="down">${esc(e.message)}</span>`; }
   };
   /* ---- time travel: ramalan AI seandainya dibuat di candle lampau ---- */
@@ -817,7 +823,7 @@ PAGES.chart = async (view, query) => {
       const r = await api("/api/forecast_at", { symbol: A.sym, tf: A.tf, time_s: Math.round(t) });
       if (!$("#verdict")) return;
       A.tt = r;
-      const need = Math.ceil((Date.now() / 1000 + 7 * 3600 - r.as_of) / step) + 80;
+      const need = Math.ceil((nowWibSec() - r.as_of) / step) + 80;
       if (need > (A.limit || 300)) { A.limit = Math.min(5000, need); await loadCandles(); }
       drawForecast(); drawHistory(); renderTT();
       C.main.timeScale().setVisibleRange({ from: r.as_of - 90 * step, to: r.as_of + (r.signal.path.length + 25) * step });
@@ -894,7 +900,7 @@ PAGES.chart = async (view, query) => {
   const pk = picker($("#symPick"), { venue: m, value: A.sym, onPick: (p) => { A.sym = p; switchTo(); } });
   seg($("#tfPick"), TF, A.tf, (v) => { A.tf = v; switchTo(); });
   $("#ttPick").onclick = () => setPick(!A.ttPick);
-  $("#ttAt").max = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 16);
+  $("#ttAt").max = new Date(nowWibSec() * 1000).toISOString().slice(0, 16);
   $("#ttGo").onclick = () => {
     const v = $("#ttAt").value;
     if (!v) { toast("Pilih tanggal dan jam dulu.", "err"); return; }
@@ -908,6 +914,15 @@ PAGES.chart = async (view, query) => {
   renderQuick(); renderVerdict();
   history.replaceState(null, "", `#/${m}/chart?${encodeURIComponent(A.sym)}`);
   loadHistory();
+  every(1000, () => {
+    const el = $("#cdown"); if (!el || !A.lastOpen) return;
+    const rem = Math.round(A.lastOpen + step - nowWibSec());
+    const mm = (x) => String(x).padStart(2, "0");
+    if (rem > 0) {
+      const h = Math.floor(rem / 3600), mi = Math.floor((rem % 3600) / 60), se = rem % 60;
+      el.innerHTML = `candle tutup dalam <b>${h ? h + ":" : ""}${mm(mi)}:${mm(se)}</b>`;
+    } else el.innerHTML = m === "forex" && !mstat()?.market_open ? `<b>pasar tutup</b>` : `menunggu candle baru`;
+  });
   every(10000, loadCandles);
   every(30000, loadSignal);
 };
@@ -1046,21 +1061,20 @@ PAGES.backtest = async (view) => {
     if (F.endMode === "custom") return F.endDate || "";
     const days = Number(String(F.endMode).replace("d", ""));
     if (!days) return "";
-    const d = new Date(Date.now() - days * 86400000);
-    return d.toISOString().slice(0, 10);
+    return wibDay(Date.now() - days * 86400000);
   };
   const renderEnd = () => {
     $("#endDate").hidden = F.endMode !== "custom";
     const e = endStr();
     const startD = new Date((e ? new Date(e + "T23:59").getTime() : Date.now()) - F.candles * TF_SEC[F.tf] * 1000 * (m === "forex" ? 1.4 : 1));
-    const fmt = (d) => d.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
+    const fmt = (d) => d.toLocaleDateString("id-ID", { timeZone: WIB_TZ, day: "numeric", month: "short", year: "numeric" });
     $("#endHint").innerHTML = `Diuji kira-kira <b>${fmt(startD)}</b> sampai <b>${e ? fmt(new Date(e)) : "sekarang"}</b>.`
       + (m === "forex" && ["15m", "30m"].includes(F.tf) ? " Data Yahoo untuk 15/30 menit hanya sekitar 60 hari terakhir; dengan MT5 bisa lebih jauh." : "")
       + " Bandingkan beberapa periode untuk melihat apakah hasilnya konsisten di kondisi pasar berbeda.";
   };
   seg($("#endSeg"), { now: "Now", d30: "1 month ago", d90: "3 months ago", d180: "6 months ago", custom: "Pick date" }, String(F.endMode || "now"), (v) => { F.endMode = v; save(); renderEnd(); });
   $("#endDate").value = F.endDate || "";
-  $("#endDate").max = new Date().toISOString().slice(0, 10);
+  $("#endDate").max = wibDay(Date.now());
   $("#endDate").onchange = (e) => { F.endDate = e.target.value; save(); renderEnd(); };
   seg($("#eSeg"), { 1: "Every candle", 2: "Every 2", 4: "Every 4" }, String(F.every), (v) => { F.every = Number(v); save(); renderEst(); });
   renderEnd();
@@ -1484,3 +1498,5 @@ refreshStatus().then((s) => {
   route();
 });
 setInterval(refreshStatus, 8000);
+const tickClock = () => { const el = $("#clock"); if (el) el.innerHTML = `<b>${hhmm(Date.now())}</b> <small>WIB</small>`; };
+tickClock(); setInterval(tickClock, 15000);

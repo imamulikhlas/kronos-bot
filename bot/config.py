@@ -13,6 +13,7 @@ Config versi lama (satu robot gabungan) otomatis diubah ke struktur ini.
 venue_cfg(cfg, venue) membuat tampilan "datar" untuk satu market yang dipakai mesin robot.
 """
 import copy
+import time
 import logging
 import os
 import sys
@@ -127,6 +128,7 @@ def path_in_root(rel: str) -> Path:
 def setup_logging(name: str = "bot") -> logging.Logger:
     log_path = path_in_root(f"logs/{name}.log")
     fmt = logging.Formatter("%(asctime)s | %(levelname)-7s | %(message)s", "%Y-%m-%d %H:%M:%S")
+    fmt.converter = lambda t: time.gmtime(t + 7 * 3600)      # jam log selalu WIB
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     if not root.handlers:

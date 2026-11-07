@@ -358,6 +358,10 @@ tr.mark-row td { background: var(--card-2); }
 .results small { color: var(--ink-3); grid-column: 1 / -1; }
 pre.log { margin: 10px 0 0; padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; font-size: 12.5px; white-space: pre-wrap; max-height: 240px; overflow: auto; color: var(--ink-2); }
 
+.cdown { font-size: 12.5px; color: var(--ink-2); padding: 3px 9px; border-radius: 999px; background: var(--card-2); border: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.clock { font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.clock b { color: var(--ink); font-weight: 650; }
+
 /* ---------------- time travel ---------------- */
 .ttbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: -4px 0 16px; padding: 10px 12px; border-radius: 14px; border: 1px dashed var(--line-2); }
 .ttbar .grow { flex: 1; }
@@ -537,3 +541,4 @@ details.how { margin-top: 16px; } details.how summary { cursor: pointer; } detai
   .verdict-word { font-size: 46px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+@media (max-width: 520px) { .clock { display: none; } }

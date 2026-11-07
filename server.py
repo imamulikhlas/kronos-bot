@@ -154,13 +154,24 @@ def candles_df(symbol, tf, n, ttl=20):
     return cached(("ohlcv", symbol, tf, n), ttl, lambda: data_for(symbol).raw(symbol, tf, n))
 
 
-def sig_dict(sig: Signal, venue_c: dict, source: str):
+def path_times(symbol, tf, last_time, n):
+    """Waktu WIB tiap titik ramalan, mengikuti jam pasar (forex melompati akhir pekan)."""
+    try:
+        return [wib_epoch(t) for t in data_for(symbol).future_ts(pd.Timestamp(last_time), tf, n)]
+    except Exception:  # noqa: BLE001
+        step = TF_SEC.get(tf, 3600)
+        return [wib_epoch(last_time) + step * (i + 1) for i in range(n)]
+
+
+def sig_dict(sig: Signal, venue_c: dict, source: str, tf: str | None = None):
     venue = venue_of(sig.symbol)
     side, why = entry_side(sig, strat(venue_c, venue))
     d = dict(sig.__dict__)
     d.update(direction=sig.direction, would=side, decision=why, source=source, venue=venue,
              label=display(sig.symbol), t0=wib_epoch(sig.time))
-    d["calibrated"] = calibrated(sig, venue_c.get("timeframe"))
+    d["calibrated"] = calibrated(sig, tf or venue_c.get("timeframe"))
+    if tf and sig.path:
+        d["path_times"] = path_times(sig.symbol, tf, sig.time, len(sig.path))
     return d
 
 
@@ -226,7 +237,7 @@ def latest_signal(venue, symbol, tf):
     bot_row = row.iloc[0].to_dict() if not row.empty and (row.iloc[0]["tf"] == tf or tf == c["timeframe"]) else None
     if hit and (bot_row is None or hit[1] >= pd.Timestamp(bot_row["created"]).tz_localize(WIB).timestamp()):
         sig, at = hit
-        return sig, f"manual forecast {time.strftime('%H:%M', time.localtime(at))}"
+        return sig, f"manual forecast {pd.Timestamp(at, unit='s', tz='UTC').tz_convert(WIB).strftime('%H:%M')} WIB"
     if bot_row is not None:
         sig = signal_from_row(bot_row)
         acc = acc_for(venue, symbol, tf, sig.horizon)
@@ -694,7 +705,7 @@ def run_forecast(symbol, tf) -> Signal:
 def get_signal(symbol: str, tf: str):
     venue = venue_of(symbol)
     sig, src = latest_signal(venue, symbol, tf)
-    return {"signal": sig_dict(sig, vcfg(venue), src) if sig is not None else None}
+    return {"signal": sig_dict(sig, vcfg(venue), src, tf) if sig is not None else None}
 
 
 @app.post("/api/forecast")
@@ -706,7 +717,7 @@ def forecast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True
     except Exception as e:  # noqa: BLE001
         fail(f"Gagal meramal {display(symbol)}: {e}", 502)
     _forecasts[(symbol, tf)] = (sig, time.time())
-    return {"signal": sig_dict(sig, vcfg(venue_of(symbol)), "manual forecast")}
+    return {"signal": sig_dict(sig, vcfg(venue_of(symbol)), "manual forecast", tf)}
 
 
 _jobs: dict = {}
@@ -766,7 +777,7 @@ def forecast_at(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=T
                 pass
     after = df.iloc[idx + 1:idx + 1 + h]
     actual = [{"time": wib_epoch(t), "value": float(v)} for t, v in zip(after["timestamps"], after["close"])]
-    out = {"signal": sig_dict(sig, c, "time travel"), "as_of": wib_epoch(hist["timestamps"].iloc[-1]),
+    out = {"signal": sig_dict(sig, c, "time travel", tf), "as_of": wib_epoch(hist["timestamps"].iloc[-1]),
            "actual": actual, "complete": len(actual) == h, "short_history": len(hist) < lb}
     if actual:
         last = actual[-1]["value"]
@@ -852,7 +863,8 @@ def hindcast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True
                 fin = sig.path[k - 1] if len(sig.path) >= k else sig.path[-1]
                 lo = sig.path_lo[k - 1] if sig.path_lo else None
                 hi = sig.path_hi[k - 1] if sig.path_hi else None
-                pts.append({"t0": wib_epoch(sig.time), "last_close": sig.last_close, "path": sig.path, "path_lo": sig.path_lo,
+                pts.append({"t0": wib_epoch(sig.time), "path_times": path_times(symbol, tf, sig.time, len(sig.path)),
+                            "last_close": sig.last_close, "path": sig.path, "path_lo": sig.path_lo,
                             "path_hi": sig.path_hi, "exp_ret_pct": sig.exp_ret_pct, "prob_up": sig.prob_up,
                             "prob_down": sig.prob_down, "direction": sig.direction, "actual_ret_pct": float(act_ret),
                             "hit": bool(np.sign(sig.exp_ret_pct) == np.sign(act_ret)) if act_ret else None,
@@ -1184,7 +1196,7 @@ def bt_start(symbols: list = Body(None, embed=True), symbol: str = Body("", embe
             e = pd.Timestamp(end)
         except Exception:  # noqa: BLE001
             fail("Tanggal tidak valid.")
-        if e > pd.Timestamp.now():
+        if e > pd.Timestamp.now(tz=WIB).tz_localize(None):
             end = ""
         else:
             end = e.strftime("%Y-%m-%d")
@@ -1263,7 +1275,7 @@ def bt_results(venue: str):
                     "has_opt": og is not None, "candles": m.get("candles"),
                     "device": (m.get("speed") or {}).get("device_name"), "end": m.get("end"),
                     "period": m.get("period"),
-                    "updated": time.strftime("%d %b, %H:%M", time.localtime(f.stat().st_mtime))})
+                    "updated": pd.Timestamp(f.stat().st_mtime, unit="s", tz="UTC").tz_convert(WIB).strftime("%d %b, %H:%M")})
     return {"results": out}
 
 

@@ -482,7 +482,7 @@ def optimize(df, signals, cfg, symbol, base, segs, quality, log, prog, tf, tag="
                "consistency": float(np.mean([x["return_pct"] > 0 for x in cur_sg])), "montecarlo": monte_carlo(tr, sc),
                "score": robust_score(cur_sg)}
     best_grade = grade(quality, top[0]["full"], top[0]["segments"], top[0]["montecarlo"], wf_total) if top else None
-    res = {"version": 2, "symbol": symbol, "venue": venue, "tf": tf, "created": time.strftime("%Y-%m-%d %H:%M"),
+    res = {"version": 2, "symbol": symbol, "venue": venue, "tf": tf, "created": (pd.Timestamp.utcnow() + pd.Timedelta(hours=7)).strftime("%Y-%m-%d %H:%M"),
            "combos": len(combos), "valid": len(valid),
            "segments": [{"from": str(df["timestamps"].iloc[x])[:16], "to": str(df["timestamps"].iloc[y - 1])[:16]}
                         for x, y in segs],
