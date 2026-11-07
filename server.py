@@ -797,6 +797,153 @@ class ai_slot:
         return False
 
 
+# ===================================================================== tune AI: cari setelan model yang paling tepat
+def binom_p(hits, n):
+    import backtest as bt
+    return bt.binom_p(hits, n)
+
+
+def tune_file(symbol, tf):
+    return path_in_root(f"data/tune_{symbol.replace('/', '')}_{tf}.json")
+
+
+@app.get("/api/tune")
+def tune_get(symbol: str, tf: str):
+    f = tune_file(symbol, tf)
+    return {"result": json.loads(f.read_text()) if f.exists() else None}
+
+
+@app.post("/api/tune")
+def tune_start(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True), points: int = Body(60, embed=True)):
+    """Uji beberapa setelan model (panjang riwayat x keacakan) di titik-titik masa lalu yang sama,
+    lalu nilai akurasi arah untuk tiap jarak ramalan. Satu kali ramal memberi nilai untuk semua jarak."""
+    if not (KRONOS_DIR / "model").exists():
+        fail("Setup belum selesai: folder Kronos belum ada.")
+    if tf not in TFS:
+        fail("Timeframe tidak dikenal.")
+    points = max(20, min(200, int(points)))
+    venue = venue_of(symbol)
+    job = new_job("tune", f"Tune AI {display(symbol)} {tf.upper()}", venue, symbol=symbol)
+    jid = job["id"]
+
+    def work():
+        from bot.forecast import default_batch
+        try:
+            c = vcfg(venue)
+            m = dict(c["model"])
+            L, H = int(m["lookback"]), int(m["pred_len"])
+            data = data_for(symbol)
+            gap = max(2, H // 2)                       # jarak antar titik uji
+            df = data.history(symbol, tf, L + points * gap + H + 5)
+            n = len(df)
+            origins = [t for t in range(n - H - (points - 1) * gap - 1, n - H, gap) if t >= L][-points:]
+            if len(origins) < 15:
+                raise RuntimeError(f"data hanya {n} candle")
+            close = df["close"].to_numpy(float)
+            short = max(64, L // 2)
+            configs = [{"lookback": L, "temperature": 1.0}, {"lookback": L, "temperature": 0.6},
+                       {"lookback": short, "temperature": 1.0}, {"lookback": short, "temperature": 0.6}]
+            horizons = sorted({h for h in (2, 3, 4, 6, 8, 12, 16, 24) if h <= H} | {H})
+            job["total"] = len(configs) * len(origins)
+            rows = []
+            with ai_slot(job):
+                fc = get_forecaster(m)
+                base_cfg = dict(fc.cfg)
+                bs = default_batch(getattr(fc, "device", "cpu"))
+                try:
+                    for cfg_i in configs:
+                        fc.cfg = {**base_cfg, "temperature": cfg_i["temperature"], "ensemble": False}
+                        job["phase"] = f"riwayat {cfg_i['lookback']} candle, keacakan {cfg_i['temperature']}"
+                        res = {h: [{"n": 0, "hit": 0, "sn": 0, "shit": 0, "brier": 0.0} for _ in range(2)] for h in horizons}
+                        half_at = origins[len(origins) // 2]
+                        for i in range(0, len(origins), bs):
+                            check_cancel(job)
+                            chunk = origins[i:i + bs]
+                            items = []
+                            for t in chunk:
+                                hist = df.iloc[t - cfg_i["lookback"]:t].reset_index(drop=True)
+                                items.append((hist, data.future_ts(hist["timestamps"].iloc[-1], tf, H)))
+                            for t, paths in zip(chunk, fc.paths_many(items)):
+                                last = close[t - 1]
+                                for h in horizons:
+                                    rets = paths[:, h - 1, 3] / last - 1
+                                    act = close[t + h - 1] / last - 1
+                                    if act == 0:
+                                        continue
+                                    pu = float((rets > 0).mean())
+                                    srt = np.sort(rets)
+                                    cut = len(srt) // 10 if len(srt) >= 10 else 0
+                                    exp = float(srt[cut:len(srt) - cut].mean())
+                                    r = res[h][0 if t < half_at else 1]      # paruh awal = pilih, paruh akhir = uji
+                                    r["n"] += 1
+                                    r["hit"] += int(np.sign(exp) == np.sign(act))
+                                    r["brier"] += (pu - (1.0 if act > 0 else 0.0)) ** 2
+                                    if pu >= 0.65 or pu <= 0.35:
+                                        r["sn"] += 1
+                                        r["shit"] += int((pu >= 0.65) == (act > 0))
+                            job["done"] += len(chunk)
+                        for h, (a, b) in res.items():
+                            n, hit, sn, shit = a["n"] + b["n"], a["hit"] + b["hit"], a["sn"] + b["sn"], a["shit"] + b["shit"]
+                            if not n:
+                                continue
+                            rows.append({**cfg_i, "horizon": h, "n": n, "hit": hit / n, "p_value": binom_p(hit, n),
+                                         "brier": (a["brier"] + b["brier"]) / n, "strong_n": sn,
+                                         "strong_hit": shit / sn if sn else None, "strong_p": binom_p(shit, sn) if sn else None,
+                                         "train": a, "test": b,
+                                         "test_hit": b["hit"] / b["n"] if b["n"] else None,
+                                         "test_strong_hit": b["shit"] / b["sn"] if b["sn"] else None, "test_strong_n": b["sn"]})
+                finally:
+                    fc.cfg = base_cfg
+            # peringkat HANYA dari paruh awal; paruh akhir dipakai untuk mengecek (mencegah "menang karena kebetulan")
+            def score(r):
+                a = r["train"]
+                if not a["n"]:
+                    return -1
+                strong = a["shit"] / a["sn"] if a["sn"] >= max(8, a["n"] // 5) else None
+                return (strong if strong is not None else a["hit"] / a["n"]) - 0.25 * a["brier"] / a["n"]
+            rows.sort(key=score, reverse=True)
+            tests = len(rows)
+            for r in rows:
+                p = r["strong_p"] if r["strong_n"] >= 20 and r["strong_p"] is not None else r["p_value"]
+                r["p_adj"] = min(1.0, p * tests)                 # koreksi karena banyak setelan dicoba
+                tb = r["test"]
+                th = (tb["shit"] / tb["sn"]) if tb["sn"] >= 8 else (tb["hit"] / tb["n"] if tb["n"] else 0)
+                r["holds"] = th >= 0.55
+                r.pop("train"), r.pop("test")
+            cur = next((r for r in rows if r["lookback"] == L and r["temperature"] == float(m.get("temperature", 1.0))
+                        and r["horizon"] == H), None)
+            best = rows[0] if rows else None
+            result = {"symbol": symbol, "label": display(symbol), "tf": tf, "points": len(origins), "model": m["name"],
+                      "n_paths": m["n_paths"], "time": int(time.time() * 1000), "rows": rows, "best": best,
+                      "current": cur, "tests": len(rows), "base_rate_up": float(np.mean([close[t + H - 1] > close[t - 1] for t in origins])),
+                      "period": [str(df["timestamps"].iloc[origins[0]])[:16], str(df["timestamps"].iloc[origins[-1]])[:16]]}
+            f = tune_file(symbol, tf)
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(json.dumps(result))
+            job["result"] = result
+        except Cancelled:
+            job["error"] = "Dibatalkan."
+        except Exception as e:  # noqa: BLE001
+            job["error"] = str(e)
+        finally:
+            end_job(job)
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"job": jid}
+
+
+@app.post("/api/tune/apply")
+def tune_apply(lookback: int = Body(..., embed=True), temperature: float = Body(..., embed=True),
+               horizon: int = Body(..., embed=True)):
+    c = full_cfg()
+    c["model"]["lookback"] = max(64, min(2048, int(lookback)))
+    c["model"]["temperature"] = max(0.1, min(2.0, float(temperature)))
+    c["model"]["pred_len"] = max(2, min(120, int(horizon)))
+    ctl.save_config(c)
+    restarted = [v for v in VENUES if ctl.restart_if_running(v)]
+    return {"ok": True, "restarted": bool(restarted)}
+
+
 @app.post("/api/forecast_at")
 def forecast_at(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True), time_s: int = Body(..., embed=True)):
     """'Time travel': ramalan AI seandainya dibuat saat candle `time_s` tutup (hanya data sampai candle itu),
@@ -1055,7 +1202,7 @@ def activity():
             phase = f"{j['phase']} · {j['current']}"
         link = None
         if j.get("venue"):
-            page = {"scanner": "scanner", "hindcast": "chart", "timetravel": "chart", "forecast": "chart",
+            page = {"scanner": "scanner", "hindcast": "chart", "timetravel": "chart", "forecast": "chart", "tune": "chart",
                     "forecast_all": "markets"}.get(j["kind"], "overview")
             link = f"#/{j['venue']}/{page}" + (f"?{j['symbol']}" if j.get("symbol") and page == "chart" else "")
         items.append({"id": j["id"], "kind": j["kind"], "venue": j.get("venue"), "label": j["label"], "phase": phase,

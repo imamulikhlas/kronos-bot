@@ -695,7 +695,8 @@ PAGES.chart = async (view, query) => {
       </section>
       <section class="card" id="verdict"></section>
     </div>
-    <section class="card" id="hist" style="margin-top:16px"></section>`;
+    <section class="card" id="hist" style="margin-top:16px"></section>
+    <section class="card" id="tune" style="margin-top:16px"></section>`;
   const renderQuick = () => {
     $("#quick").innerHTML = watch.map((s) => `<button data-q="${esc(s)}" class="${s === A.sym ? "on" : ""}">${traded.includes(s) ? `<i title="auto trading"></i>` : ""}${esc(labelOf(s))}</button>`).join("");
     $$("[data-q]").forEach((b) => b.onclick = () => { A.sym = b.dataset.q; pk.set(A.sym); switchTo(); });
@@ -742,11 +743,12 @@ PAGES.chart = async (view, query) => {
     if (!h || !A.histN) { C.candles.setMarkers(ttMark); return; }
     const marks = [];
     h.points.forEach((p) => {
+      const weak = p.direction === "SAMPING";
       const col = !p.complete ? acc : p.hit ? up : down;
-      const ser = C.main.addLineSeries({ color: col, lineWidth: 3, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+      const ser = C.main.addLineSeries({ color: weak ? hexA(col, 0.45) : col, lineWidth: weak ? 1 : 3, lineStyle: weak ? 2 : 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
       ser.setData([{ time: p.t0, value: p.last_close }, ...p.path.map((v, i) => ({ time: p.path_times?.[i] ?? p.t0 + h.step * (i + 1), value: v }))]);
       A.histSeries.push(ser);
-      if (p.complete) marks.push({ time: p.t0, position: p.exp_ret_pct >= 0 ? "belowBar" : "aboveBar", color: col, shape: p.exp_ret_pct >= 0 ? "arrowUp" : "arrowDown", text: p.hit ? "✓" : "✕" });
+      if (p.complete && !weak) marks.push({ time: p.t0, position: p.exp_ret_pct >= 0 ? "belowBar" : "aboveBar", color: col, shape: p.exp_ret_pct >= 0 ? "arrowUp" : "arrowDown", text: p.hit ? "✓" : "✕" });
     });
     C.candles.setMarkers([...marks.filter((x) => !A.tt || x.time !== A.tt.as_of), ...ttMark].sort((a, b) => a.time - b.time));
   };
@@ -764,15 +766,16 @@ PAGES.chart = async (view, query) => {
     const hrs = (TF_SEC[A.tf] * (h.points[0]?.path.length || 12)) / 3600;
     el.innerHTML = `<div class="card-head"><h2>AI track record</h2><small>${sm.n} ramalan lalu, masing-masing ${hrs >= 24 ? nf(hrs / 24, 1) + " hari" : nf(hrs, 0) + " jam"} ke depan</small></div>
       <div class="track">
-        <div><div class="verdict-word ${sm.hit >= 0.5 ? "up" : "down"}" style="font-size:56px">${sm.hits}/${sm.n}</div><div class="soft small">arah benar (${p0(sm.hit)})</div></div>
-        <div class="track-dots">${h.points.map((p) => `<i class="${!p.complete ? "" : p.hit ? "p" : "n"}" title="${esc(new Date(p.t0 * 1000).toISOString().slice(5, 16).replace("T", " "))} · AI ${pct(p.exp_ret_pct)} · nyata ${pct(p.actual_ret_pct)}"></i>`).join("")}</div>
+        <div>${sm.strong_n ? `<div class="verdict-word ${sm.strong_hits / sm.strong_n >= 0.5 ? "up" : "down"}" style="font-size:56px">${sm.strong_hits}/${sm.strong_n}</div><div class="soft small">sinyal kuat benar (${p0(sm.strong_hits / sm.strong_n)})<br>semua ramalan: ${sm.hits}/${sm.n}</div>`
+          : `<div class="verdict-word ${sm.hit >= 0.5 ? "up" : "down"}" style="font-size:56px">${sm.hits}/${sm.n}</div><div class="soft small">arah benar (${p0(sm.hit)}), belum ada sinyal kuat</div>`}</div>
+        <div class="track-dots">${h.points.map((p) => `<i class="${!p.complete ? "" : p.hit ? "p" : "n"} ${p.direction === "SAMPING" ? "w" : ""}" title="${esc(new Date(p.t0 * 1000).toISOString().slice(5, 16).replace("T", " "))} · AI ${pct(p.exp_ret_pct)} · nyata ${pct(p.actual_ret_pct)}"></i>`).join("")}</div>
         <dl class="track-facts">
           <div><dt>Avg price error at the end</dt><dd>${nf(sm.err_pct, 2)}% <small class="${sm.err_pct < sm.naive_err_pct ? "up" : "down"}">${sm.err_pct < sm.naive_err_pct ? "lebih baik" : "lebih buruk"} dari menebak "diam" (${nf(sm.naive_err_pct, 2)}%)</small></dd></div>
           <div><dt>Ended inside forecast range</dt><dd>${p0(sm.in_band)} <small class="faint">idealnya sekitar 80%</small></dd></div>
           <div><dt>Strong Up/Down signals right</dt><dd>${sm.strong_n ? `${sm.strong_hits}/${sm.strong_n}` : "–"}</dd></div>
         </dl>
       </div>
-      <p class="faint small" style="margin:12px 0 0">Garis hijau = arah ramalan benar, merah = salah, warna aksen = masih berjalan. Ini contoh kecil. Untuk penilaian yang lebih kuat, jalankan Backtest.</p>`;
+      <p class="faint small" style="margin:12px 0 0">Garis tebal = sinyal kuat (yang akan dipakai robot), garis tipis putus-putus = ramalan lemah/sideways yang robot abaikan. Hijau = benar, merah = salah. ${sm.n} ramalan masih terlalu sedikit untuk menilai; pakai <b>Tune the AI</b> di bawah untuk menguji puluhan titik.</p>`;
   };
   const loadHistory = async () => {
     if (!A.histN) { A.hist = null; drawHistory(); renderHist(); return; }
@@ -792,6 +795,61 @@ PAGES.chart = async (view, query) => {
       }
     } catch (e) { renderHist({ error: e.message }); }
   };
+  /* ---- Tune the AI: uji beberapa setelan model di puluhan titik lampau ---- */
+  const renderTune = (state) => {
+    const el = $("#tune"); if (!el) return;
+    const t = A.tune;
+    const head = `<div class="card-head"><h2>Tune the AI</h2><small>${t ? `${t.points} titik, ${esc(String(t.period[0]).slice(0, 10))} → ${esc(String(t.period[1]).slice(0, 10))}` : ""}</small></div>`;
+    const ctl = `<div class="toolbar" style="margin-bottom:12px"><span class="small soft">Test points</span><span id="tunePts"></span>
+      <button class="btn dark" id="tuneGo" data-busy="Starting…">${t ? "Run again" : "Tune AI for " + esc(labelOf(A.sym))}</button></div>`;
+    if (state === "running") { el.innerHTML = head + `<div class="soft"><span class="spinner"></span> <span id="tuneProg">Menguji setelan…</span></div>`; return; }
+    if (!t) {
+      el.innerHTML = head + `<p class="soft" style="margin-top:0">AI diuji di puluhan titik masa lalu dengan 4 setelan berbeda (panjang riwayat yang dibaca × tingkat keacakan), lalu tiap jarak ramalan dinilai: 1, 2, 4, 8, … candle ke depan. Hasilnya menunjukkan setelan dan jarak ramalan mana yang benar-benar tepat untuk pair ini, termasuk kalau ternyata tidak ada yang bagus.</p>` + ctl;
+    } else {
+      const ok = (r) => r && r.holds && r.p_adj < 0.1;
+      const testAcc = (r) => (r.test_strong_n >= 8 ? r.test_strong_hit : r.test_hit);
+      const best = t.best, cur = t.current;
+      const hrs = (h) => { const x = (h * TF_SEC[t.tf]) / 3600; return x >= 24 ? `${nf(x / 24, x % 24 ? 1 : 0)} hari` : `${nf(x, 0)} jam`; };
+      const row = (r, tag) => `<tr class="${tag ? "mark-row" : ""}"><td>${tag ? `<b>${tag}</b>` : ""}</td><td>${r.lookback} candle</td><td>${r.temperature === 1 ? "normal" : "rendah"}</td><td>${r.horizon} candle <span class="faint">(${hrs(r.horizon)})</span></td>
+        <td class="r"><b class="${r.hit >= 0.55 ? "up" : r.hit < 0.5 ? "down" : ""}">${p0(r.hit)}</b> <span class="faint">${r.n}</span></td>
+        <td class="r">${r.strong_hit == null ? "–" : `<b class="${r.strong_hit >= 0.55 ? "up" : r.strong_hit < 0.5 ? "down" : ""}">${p0(r.strong_hit)}</b> <span class="faint">${r.strong_n}</span>`}</td>
+        <td class="r">${testAcc(r) == null ? "–" : `<b class="${testAcc(r) >= 0.55 ? "up" : testAcc(r) < 0.5 ? "down" : ""}">${p0(testAcc(r))}</b>`}</td>
+        <td>${r.p_adj < 0.05 ? `<span class="tag long">terbukti</span>` : r.p_adj < 0.2 ? `<span class="tag">ada tanda</span>` : `<span class="tag warn">bisa kebetulan</span>`}</td></tr>`;
+      el.innerHTML = head + `
+        <div class="notice ${ok(best) ? "ok" : "warn"}" style="margin-bottom:14px">${ok(best)
+          ? `<b>Setelan terbaik untuk ${esc(t.label)} ${TF[t.tf]}:</b> baca ${best.lookback} candle, keacakan ${best.temperature === 1 ? "normal" : "rendah"}, ramal ${best.horizon} candle (${hrs(best.horizon)}) ke depan. Dipilih dari paruh awal data, lalu dicek di paruh akhir yang belum dilihat: benar ${p0(testAcc(best))}.${cur ? ` Setelan sekarang: ${p0(cur.strong_hit ?? cur.hit)}.` : ""}`
+          : `<b>Belum ada setelan yang terbukti tepat di ${esc(t.label)} ${TF[t.tf]}.</b> ${best && !best.holds ? `Setelan yang terlihat paling bagus di paruh awal (${p0(best.strong_hit ?? best.hit)}) tidak bertahan di paruh akhir (${p0(testAcc(best))}), jadi kemungkinan hanya kebetulan.` : `Hasil terbaik belum cukup kuat setelah dikoreksi karena ${t.tests} kombinasi dicoba.`} Coba lebih banyak titik uji, timeframe lain (4H sering lebih mudah ditebak daripada 1H), atau jangan serahkan pair ini ke robot.`}</div>
+        <div class="table-wrap"><table><thead><tr><th></th><th>History read</th><th>Randomness</th><th>Forecast ahead</th><th class="r">All right</th><th class="r">Strong right</th><th class="r">Unseen half</th><th>Proof</th></tr></thead><tbody>
+          ${best ? row(best, "Best") : ""}${cur && !(best && cur.lookback === best.lookback && cur.temperature === best.temperature && cur.horizon === best.horizon) ? row(cur, "Now") : ""}
+          ${t.rows.filter((r) => ![best, cur].some((x) => x && x.lookback === r.lookback && x.temperature === r.temperature && x.horizon === r.horizon)).slice(0, 6).map((r) => row(r, "")).join("")}
+        </tbody></table></div>
+        <p class="faint small" style="margin:10px 0 12px">"Strong right" = akurasi saat AI yakin (≥65% skenario searah), yaitu sinyal yang dipakai robot. "Unseen half" = akurasi di paruh akhir data yang tidak dipakai saat memilih; inilah angka yang paling jujur. "Proof" sudah dikoreksi karena ${t.tests} kombinasi dicoba sekaligus. Kenaikan harga di periode ini ${p0(t.base_rate_up)} dari waktu, jadi akurasi di bawah itu tidak lebih baik dari menebak "naik" terus. Setelan model berlaku untuk Crypto dan Forex.</p>
+        <div class="toolbar">${best && ok(best) ? `<button class="btn accent" id="tuneApply">Apply best settings</button>` : ""}</div>` + ctl;
+      $("#tuneApply")?.addEventListener("click", async () => {
+        if (!(await modal({ title: "Apply best AI settings?", confirm: "Apply", body: `<p>Model akan membaca ${best.lookback} candle, keacakan ${best.temperature === 1 ? "normal" : "rendah"}, dan meramal ${best.horizon} candle ke depan. Berlaku untuk semua pair Crypto dan Forex. Jalankan Backtest lagi sesudahnya.</p>` }))) return;
+        try { const r = await api("/api/tune/apply", { lookback: best.lookback, temperature: best.temperature, horizon: best.horizon }); toast(r.restarted ? "AI settings applied. Bot restarted." : "AI settings applied."); }
+        catch (e) { toast(e.message, "err"); }
+      });
+    }
+    if (state && state.error) el.insertAdjacentHTML("beforeend", `<div class="notice err" style="margin-top:10px">${esc(state.error)}</div>`);
+    seg($("#tunePts"), { 30: "30", 60: "60", 120: "120" }, String(A.tunePts || 60), (v) => { A.tunePts = Number(v); });
+    $("#tuneGo").onclick = (e) => busy(e.currentTarget, async () => {
+      if (!(await heavyGuard("tuning"))) return;
+      let job;
+      try { job = (await api("/api/tune", { symbol: A.sym, tf: A.tf, points: A.tunePts || 60 })).job; } catch (err) { toast(err.message, "err"); return; }
+      const sym = A.sym;
+      renderTune("running");
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1500));
+        if (!$("#tune") || A.sym !== sym) return;
+        const j = await api(`/api/scan/${job}`).catch(() => null);
+        if (!j) continue;
+        if (j.finished) { if (j.result) A.tune = j.result; renderTune(j.error ? { error: j.error } : null); if (!j.error) toast("Tuning selesai."); return; }
+        const p = $("#tuneProg"); if (p) p.textContent = `${j.waiting ? "Menunggu giliran AI…" : `Menguji ${j.phase || ""}`} (${j.done}/${j.total})`;
+      }
+    });
+  };
+  const loadTune = async () => { A.tune = (await api(`/api/tune?symbol=${encodeURIComponent(A.sym)}&tf=${A.tf}`).catch(() => ({}))).result || null; renderTune(); };
   const loadCandles = async () => {
     try {
       const d = await api(`/api/candles?symbol=${encodeURIComponent(A.sym)}&tf=${A.tf}&limit=${A.limit || (A.histN > 12 ? 500 : 300)}`);
@@ -899,7 +957,7 @@ PAGES.chart = async (view, query) => {
   };
   const switchTo = () => {
     store.set(`kronos-chart-${m}`, A.sym);
-    A.fitted = false; A.signal = null; A.hist = null; A.histSeries = []; A.tt = null; A.limit = 0; $("#ttNav").innerHTML = ""; setPick(false); C = mkCharts(); renderQuick(); renderVerdict(); loadCandles(); loadSignal(); loadHistory();
+    A.fitted = false; A.signal = null; A.hist = null; A.histSeries = []; A.tt = null; loadTune(); A.limit = 0; $("#ttNav").innerHTML = ""; setPick(false); C = mkCharts(); renderQuick(); renderVerdict(); loadCandles(); loadSignal(); loadHistory();
     history.replaceState(null, "", `#/${m}/chart?${encodeURIComponent(A.sym)}`);
   };
   const pk = picker($("#symPick"), { venue: m, value: A.sym, onPick: (p) => { A.sym = p; switchTo(); } });
@@ -919,6 +977,7 @@ PAGES.chart = async (view, query) => {
   renderQuick(); renderVerdict();
   history.replaceState(null, "", `#/${m}/chart?${encodeURIComponent(A.sym)}`);
   loadHistory();
+  loadTune();
   every(1000, () => {
     const el = $("#cdown"); if (!el || !A.lastOpen) return;
     const rem = Math.round(A.lastOpen + step - nowWibSec());
@@ -1520,6 +1579,7 @@ const KIND_ICON = {
   forecast: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
   forecast_all: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
   benchmark: '<path d="M4 16a8 8 0 1 1 16 0"/><path d="M12 16l4-5"/>',
+  tune: '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" r="2"/><circle cx="9" cy="16" r="2"/>',
 };
 function ago(sec) {
   if (!sec) return "";

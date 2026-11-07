@@ -385,6 +385,7 @@ pre.log { margin: 10px 0 0; padding: 12px; background: var(--card); border: 1px 
 .track-dots { display: flex; flex-wrap: wrap; gap: 5px; }
 .track-dots i { width: 16px; height: 16px; border-radius: 5px; background: var(--acc); border: 1px solid var(--ink); }
 .track-dots i.p { background: var(--up); border-color: var(--up); } .track-dots i.n { background: var(--down); border-color: var(--down); }
+.track-dots i.w { opacity: .35; transform: scale(.7); }
 .track-facts { margin: 0; display: grid; gap: 8px; font-size: 13.5px; }
 .track-facts div { display: grid; gap: 1px; } .track-facts dt { color: var(--ink-3); font-size: 12.5px; } .track-facts dd { margin: 0; font-weight: 650; }
 .track-facts small { font-weight: 500; margin-left: 4px; }

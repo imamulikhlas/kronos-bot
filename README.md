@@ -136,6 +136,18 @@ Di **Chart**, tekan **Time travel** lalu klik candle mana pun, atau isi tanggal 
 
 Ramalannya digambar di grafik, lalu di kanan terlihat apa yang benar-benar terjadi sesudahnya: arahnya benar atau salah, berapa meleset, dan apakah harga tetap di dalam rentang ramalan. Pakai **Earlier / Later** untuk bergeser, dan **Back to now** untuk kembali ke grafik sekarang. Hasilnya disimpan di cache, jadi membuka titik yang sama lagi langsung tampil.
 
+### Tune the AI: setelan model mana yang paling tepat untuk pair ini
+
+Di **Chart**, kotak **Tune the AI** menguji AI di 30, 60, atau 120 titik masa lalu dengan 4 setelan: panjang riwayat yang dibaca × tingkat keacakan. Tiap jarak ramalan (2, 4, 8, … candle) dinilai terpisah.
+
+Supaya tidak tertipu kebetulan:
+- setelan dipilih dari **paruh awal** data, lalu dicek di **paruh akhir** yang belum dilihat;
+- bukti statistiknya dikoreksi karena banyak kombinasi dicoba sekaligus.
+
+**Apply best settings** hanya muncul kalau setelan itu tetap bagus di paruh akhir dan buktinya kuat. Kalau tidak ada yang lolos, panel bilang terus terang bahwa pair atau timeframe itu sulit ditebak.
+
+Di **Past forecasts**, garis tebal adalah sinyal kuat (yang dipakai robot), dan garis tipis putus-putus adalah ramalan lemah yang diabaikan robot.
+
 ### Ramalan ensemble
 
 **Settings → AI model & compute → Ensemble forecast** (aktif secara default) membagi skenario ke tiga panjang riwayat yang berbeda. Hasilnya, ramalan tidak bergantung pada satu jendela data. Perkiraan tengah juga dihitung dengan rata-rata terpangkas, supaya satu-dua skenario ekstrem tidak menyeret hasil.
