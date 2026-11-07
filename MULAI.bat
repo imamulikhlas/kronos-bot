@@ -1,4 +1,9 @@
 @echo off
+rem Jalankan di konsol yang tetap terbuka, supaya pesan error selalu terbaca.
+if not "%~1"=="__run" (
+  cmd /k ""%~f0" __run"
+  exit /b
+)
 title Robot Trading Kronos
 cd /d "%~dp0"
 set PYTHONUTF8=1
