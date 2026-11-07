@@ -136,17 +136,31 @@ Di **Chart**, tekan **Time travel** lalu klik candle mana pun, atau isi tanggal 
 
 Ramalannya digambar di grafik, lalu di kanan terlihat apa yang benar-benar terjadi sesudahnya: arahnya benar atau salah, berapa meleset, dan apakah harga tetap di dalam rentang ramalan. Pakai **Earlier / Later** untuk bergeser, dan **Back to now** untuk kembali ke grafik sekarang. Hasilnya disimpan di cache, jadi membuka titik yang sama lagi langsung tampil.
 
-### Tune the AI: setelan model mana yang paling tepat untuk pair ini
+### Tune the AI: cari setelan yang paling tepat
 
-Di **Chart**, kotak **Tune the AI** menguji AI di 30, 60, atau 120 titik masa lalu dengan 4 setelan: panjang riwayat yang dibaca × tingkat keacakan. Tiap jarak ramalan (2, 4, 8, … candle) dinilai terpisah.
+Di **Chart**, kotak **Tune the AI** mencari kombinasi terbaik dari:
+- timeframe (**All timeframes**: 1H, 4H, 1D);
+- panjang riwayat yang dibaca AI;
+- tingkat keacakan;
+- jarak ramalan (2, 4, 8, … candle);
+- seberapa yakin AI harus sebelum ramalannya dipakai (semua, ≥60%, ≥70%, ≥80%).
 
-Supaya tidak tertipu kebetulan:
-- setelan dipilih dari **paruh awal** data, lalu dicek di **paruh akhir** yang belum dilihat;
-- bukti statistiknya dikoreksi karena banyak kombinasi dicoba sekaligus.
+Cara menilainya jujur:
+- kombinasi dipilih **hanya dari paruh awal** titik uji, lalu diuji di **paruh akhir** yang belum pernah dilihat;
+- hasilnya **Found** (terbukti), **Promising** (menjanjikan), atau **No reliable setting** (tidak ada yang andal);
+- **Apply** memasang timeframe, ambang yakin, dan setelan model sekaligus.
 
-**Apply best settings** hanya muncul kalau setelan itu tetap bagus di paruh akhir dan buktinya kuat. Kalau tidak ada yang lolos, panel bilang terus terang bahwa pair atau timeframe itu sulit ditebak.
+Kalau hasilnya "No reliable setting", berarti AI belum punya keunggulan nyata di pair itu. Itu jawaban yang berguna: pair tersebut sebaiknya tidak diserahkan ke robot. Coba dengan lebih banyak titik uji, atau pair lain dari Scanner.
 
-Di **Past forecasts**, garis tebal adalah sinyal kuat (yang dipakai robot), dan garis tipis putus-putus adalah ramalan lemah yang diabaikan robot.
+### Past forecasts: Line atau Segments
+
+- **Line:** satu garis AI bersambung. Tiap titik adalah harga yang diramal 1, 4, atau 12 candle sebelumnya, dengan titik hijau/merah untuk benar/salah. Cara ini paling mudah untuk membandingkan ramalan dengan harga sebenarnya.
+- **Segments:** tiap ramalan digambar utuh. Garis tebal = sinyal kuat, garis tipis putus-putus = ramalan lemah.
+
+### Memori
+
+- **Cancel** di panel Activity menghentikan pekerjaan setelah potongan yang sedang dihitung selesai (biasanya beberapa detik), lalu melepas model AI dari memori.
+- Model AI di panel juga dilepas otomatis setelah 10 menit tidak dipakai, atau lewat tombol **Free memory**.
 
 ### Ramalan ensemble
 

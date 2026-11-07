@@ -1,7 +1,7 @@
 /* kronos — panel trading (vanilla JS, tanpa build)
    Struktur: pilih market (crypto / forex) -> Overview · Markets · Chart · Backtest · Settings. Account global. */
 "use strict";
-const APP_VERSION = "2026.11.08.2";   // harus sama dengan bot/version.py
+const APP_VERSION = "2026.11.08.3";   // harus sama dengan bot/version.py
 
 /* ===================================================================== utilitas */
 const $ = (s, el = document) => el.querySelector(s);
@@ -690,12 +690,13 @@ PAGES.chart = async (view, query) => {
   try { watch = (await api(`/api/${m}/config`)).watchlist; } catch { watch = (st?.symbols || []).map((x) => x.symbol); }
   const traded = (st?.symbols || []).map((x) => x.symbol);
   const A = { sym: query || store.get(`kronos-chart-${m}`, traded[0] || watch[0]), tf: st?.timeframe || "1h", signal: null, fitted: false,
-    histN: store.get("kronos-hist-n", 12), hist: null, histSeries: [], histJob: 0 };
+    histN: store.get("kronos-hist-n", 12), histMode: store.get("kronos-hist-mode", "line"), histLead: store.get("kronos-hist-lead", 4),
+    hist: null, histSeries: [], histJob: 0 };
   view.innerHTML = `
     <div class="head"><div><h1>Chart</h1><p>Grafik live satu pair dan ke mana AI memperkirakan harganya bergerak. Garis tebal = perkiraan tengah, garis putus-putus = batas atas dan bawah kemungkinan. <b>Past forecasts</b> menampilkan ramalan AI di masa lalu dibanding harga yang benar-benar terjadi.</p></div></div>
     <div class="toolbar" style="margin-bottom:12px"><div class="quick" id="quick"></div></div>
     <div class="toolbar" style="margin-bottom:16px"><div id="symPick"></div><div id="tfPick"></div><div class="grow"></div>
-      <span class="hist-ctl"><span class="small soft">Past forecasts</span><span id="histSeg"></span></span>
+      <span class="hist-ctl"><span class="small soft">Past forecasts</span><span id="histSeg"></span><span id="histMode"></span><span id="histLead"></span></span>
       <button class="btn accent" id="fcBtn" data-busy="Forecasting…"><svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>Run forecast</button></div>
     <div class="ttbar" id="ttBar">
       <button class="btn" id="ttPick" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M12 7.5V12l3 2"/><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6M3 4v4h4"/></svg>Time travel</button>
@@ -757,6 +758,19 @@ PAGES.chart = async (view, query) => {
     C.candles.applyOptions({ upColor: hexA(up, fade), downColor: hexA(down, fade), wickUpColor: hexA(up, fade), wickDownColor: hexA(down, fade) });
     const ttMark = A.tt ? [{ time: A.tt.as_of, position: "aboveBar", color: cssv("--ink"), shape: "square", text: "AI view" }] : [];
     if (!h || !A.histN) { C.candles.setMarkers(ttMark); return; }
+    if (h.mode === "line") {
+      const band = { color: hexA(acc, 0.45), lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false };
+      const lo = C.main.addLineSeries(band), hi = C.main.addLineSeries(band);
+      const ln = C.main.addLineSeries({ color: acc, lineWidth: 2.5, lastValueVisible: false, priceLineVisible: false, title: "AI" });
+      const pts = h.line.filter((x) => x.value != null);
+      ln.setData(pts.map((x) => ({ time: x.time, value: x.value })));
+      lo.setData(pts.filter((x) => x.lo != null).map((x) => ({ time: x.time, value: x.lo })));
+      hi.setData(pts.filter((x) => x.hi != null).map((x) => ({ time: x.time, value: x.hi })));
+      ln.setMarkers(pts.filter((x) => x.hit != null).map((x) => ({ time: x.time, position: "inBar", color: x.hit ? up : down, shape: "circle", size: 0.6 })));
+      A.histSeries.push(lo, hi, ln);
+      C.candles.setMarkers(ttMark);
+      return;
+    }
     const marks = [];
     h.points.forEach((p) => {
       const weak = p.direction === "SAMPING";
@@ -779,6 +793,20 @@ PAGES.chart = async (view, query) => {
     if (state && state.error) { el.innerHTML = `<div class="card-head"><h2>AI track record</h2></div><div class="notice err">${esc(state.error)}</div>`; return; }
     const h = A.hist; if (!h) return;
     const sm = h.summary;
+    if (h.mode === "line") {
+      const leadH = (h.lead * TF_SEC[A.tf]) / 3600;
+      el.innerHTML = `<div class="card-head"><h2>AI track record</h2><small>garis AI = harga yang diramal ${h.lead} candle sebelumnya (${leadH >= 24 ? nf(leadH / 24, 1) + " hari" : nf(leadH, 0) + " jam"})</small></div>
+        <div class="track">
+          <div><div class="verdict-word ${sm.hit >= 0.5 ? "up" : "down"}" style="font-size:56px">${sm.hits}/${sm.n}</div><div class="soft small">arah benar (${p0(sm.hit)})</div></div>
+          <div class="track-dots">${h.line.filter((x) => !x.future).map((x) => `<i class="${x.hit == null ? "" : x.hit ? "p" : "n"}"></i>`).join("")}</div>
+          <dl class="track-facts">
+            <div><dt>Avg price error</dt><dd>${nf(sm.err_pct, 2)}% <small class="${sm.err_pct < sm.naive_err_pct ? "up" : "down"}">${sm.err_pct < sm.naive_err_pct ? "lebih baik" : "lebih buruk"} dari menebak "diam" (${nf(sm.naive_err_pct, 2)}%)</small></dd></div>
+            <div><dt>Price inside forecast range</dt><dd>${p0(sm.in_band)} <small class="faint">idealnya sekitar 80%</small></dd></div>
+          </dl>
+        </div>
+        <p class="faint small" style="margin:12px 0 0">Garis aksen bersambung = ramalan AI, garis putus-putus = rentangnya, titik hijau/merah = arah benar/salah. Kalau garis AI cuma "mengekor" harga dengan terlambat, artinya AI tidak memberi informasi baru. Pakai <b>Tune the AI</b> untuk mencari jarak ramalan yang paling tepat.</p>`;
+      return;
+    }
     const hrs = (TF_SEC[A.tf] * (h.points[0]?.path.length || 12)) / 3600;
     el.innerHTML = `<div class="card-head"><h2>AI track record</h2><small>${sm.n} ramalan lalu, masing-masing ${hrs >= 24 ? nf(hrs / 24, 1) + " hari" : nf(hrs, 0) + " jam"} ke depan</small></div>
       <div class="track">
@@ -798,7 +826,7 @@ PAGES.chart = async (view, query) => {
     const my = ++A.histJob;
     renderHist("loading");
     try {
-      const { job } = await api("/api/hindcast", { symbol: A.sym, tf: A.tf, count: A.histN });
+      const { job } = await api("/api/hindcast", { symbol: A.sym, tf: A.tf, count: A.histMode === "line" ? A.histN * 2 : A.histN, mode: A.histMode, lead: A.histLead });
       for (;;) {
         await new Promise((r) => setTimeout(r, 1200));
         if (my !== A.histJob || !$("#hist")) return;
@@ -811,48 +839,80 @@ PAGES.chart = async (view, query) => {
       }
     } catch (e) { renderHist({ error: e.message }); }
   };
-  /* ---- Tune the AI: uji beberapa setelan model di puluhan titik lampau ---- */
+  /* ---- Tune the AI: cari kombinasi paling tepat, dibuktikan di data yang belum dilihat ---- */
+  const TUNE_STATUS = {
+    proven: ["ok", "Found a setting that works", "Terbukti di paruh data yang belum dilihat."],
+    promising: ["warn", "Promising, not proven yet", "Bagus di data yang belum dilihat, tapi titik ujinya masih terlalu sedikit untuk yakin. Ulangi dengan lebih banyak titik."],
+    none: ["err", "No reliable setting found", "Tidak ada kombinasi yang tetap tepat di data yang belum dilihat."],
+  };
+  const describeRow = (r, tfSec) => {
+    const x = (r.horizon * tfSec) / 3600;
+    const span = x >= 24 ? `${nf(x / 24, x % 24 ? 1 : 0)} hari` : `${nf(x, 0)} jam`;
+    return { tf: TF[r.tf] || r.tf, ahead: `${r.horizon} candle (${span})`, when: r.threshold ? `hanya saat AI ≥${Math.round(r.threshold * 100)}% yakin` : "semua ramalan",
+      hist: `${r.lookback} candle`, rand: r.temperature === 1 ? "normal" : "rendah" };
+  };
   const renderTune = (state) => {
     const el = $("#tune"); if (!el) return;
     const t = A.tune;
-    const head = `<div class="card-head"><h2>Tune the AI</h2><small>${t ? `${t.points} titik, ${esc(String(t.period[0]).slice(0, 10))} → ${esc(String(t.period[1]).slice(0, 10))}` : ""}</small></div>`;
-    const ctl = `<div class="toolbar" style="margin-bottom:12px"><span class="small soft">Test points</span><span id="tunePts"></span>
-      <button class="btn dark" id="tuneGo" data-busy="Starting…">${t ? "Run again" : "Tune AI for " + esc(labelOf(A.sym))}</button></div>`;
-    if (state === "running") { el.innerHTML = head + `<div class="soft"><span class="spinner"></span> <span id="tuneProg">Menguji setelan…</span></div>`; return; }
+    const head = `<div class="card-head"><h2>Tune the AI</h2><small>${t ? `${t.points} titik per timeframe · ${t.tested} kombinasi diuji` : ""}</small></div>`;
+    const ctl = `<div class="tune-ctl">
+      <div class="field"><span class="label">Search</span><div id="tuneScope"></div></div>
+      <div class="field"><span class="label">Test points</span><div id="tunePts"></div></div>
+      <button class="btn dark" id="tuneGo" data-busy="Starting…">${t ? "Run again" : "Find the best setting"}</button>
+      <span class="faint small" id="tuneEst"></span></div>`;
+    if (state === "running") { el.innerHTML = head + `<div class="soft"><span class="spinner"></span> <span id="tuneProg">Menyiapkan…</span></div><p class="faint small">Bisa dibatalkan dari panel Activity di pojok kanan bawah.</p>`; return; }
+    let body = "";
     if (!t) {
-      el.innerHTML = head + `<p class="soft" style="margin-top:0">AI diuji di puluhan titik masa lalu dengan 4 setelan berbeda (panjang riwayat yang dibaca × tingkat keacakan), lalu tiap jarak ramalan dinilai: 1, 2, 4, 8, … candle ke depan. Hasilnya menunjukkan setelan dan jarak ramalan mana yang benar-benar tepat untuk pair ini, termasuk kalau ternyata tidak ada yang bagus.</p>` + ctl;
+      body = `<p class="soft" style="margin-top:0">AI diuji di puluhan titik masa lalu dengan berbagai kombinasi: timeframe, panjang riwayat yang dibaca, tingkat keacakan, jarak ramalan, dan seberapa yakin AI harus sebelum ramalannya dipakai. Kombinasi dipilih dari <b>paruh awal</b> data, lalu dibuktikan di <b>paruh akhir</b> yang belum pernah dilihat, supaya hasilnya bukan kebetulan.</p>`;
     } else {
-      const ok = (r) => r && r.holds && r.p_adj < 0.1;
-      const testAcc = (r) => (r.test_strong_n >= 8 ? r.test_strong_hit : r.test_hit);
-      const best = t.best, cur = t.current;
-      const hrs = (h) => { const x = (h * TF_SEC[t.tf]) / 3600; return x >= 24 ? `${nf(x / 24, x % 24 ? 1 : 0)} hari` : `${nf(x, 0)} jam`; };
-      const row = (r, tag) => `<tr class="${tag ? "mark-row" : ""}"><td>${tag ? `<b>${tag}</b>` : ""}</td><td>${r.lookback} candle</td><td>${r.temperature === 1 ? "normal" : "rendah"}</td><td>${r.horizon} candle <span class="faint">(${hrs(r.horizon)})</span></td>
-        <td class="r"><b class="${r.hit >= 0.55 ? "up" : r.hit < 0.5 ? "down" : ""}">${p0(r.hit)}</b> <span class="faint">${r.n}</span></td>
-        <td class="r">${r.strong_hit == null ? "–" : `<b class="${r.strong_hit >= 0.55 ? "up" : r.strong_hit < 0.5 ? "down" : ""}">${p0(r.strong_hit)}</b> <span class="faint">${r.strong_n}</span>`}</td>
-        <td class="r">${testAcc(r) == null ? "–" : `<b class="${testAcc(r) >= 0.55 ? "up" : testAcc(r) < 0.5 ? "down" : ""}">${p0(testAcc(r))}</b>`}</td>
-        <td>${r.p_adj < 0.05 ? `<span class="tag long">terbukti</span>` : r.p_adj < 0.2 ? `<span class="tag">ada tanda</span>` : `<span class="tag warn">bisa kebetulan</span>`}</td></tr>`;
-      el.innerHTML = head + `
-        <div class="notice ${ok(best) ? "ok" : "warn"}" style="margin-bottom:14px">${ok(best)
-          ? `<b>Setelan terbaik untuk ${esc(t.label)} ${TF[t.tf]}:</b> baca ${best.lookback} candle, keacakan ${best.temperature === 1 ? "normal" : "rendah"}, ramal ${best.horizon} candle (${hrs(best.horizon)}) ke depan. Dipilih dari paruh awal data, lalu dicek di paruh akhir yang belum dilihat: benar ${p0(testAcc(best))}.${cur ? ` Setelan sekarang: ${p0(cur.strong_hit ?? cur.hit)}.` : ""}`
-          : `<b>Belum ada setelan yang terbukti tepat di ${esc(t.label)} ${TF[t.tf]}.</b> ${best && !best.holds ? `Setelan yang terlihat paling bagus di paruh awal (${p0(best.strong_hit ?? best.hit)}) tidak bertahan di paruh akhir (${p0(testAcc(best))}), jadi kemungkinan hanya kebetulan.` : `Hasil terbaik belum cukup kuat setelah dikoreksi karena ${t.tests} kombinasi dicoba.`} Coba lebih banyak titik uji, timeframe lain (4H sering lebih mudah ditebak daripada 1H), atau jangan serahkan pair ini ke robot.`}</div>
-        <div class="table-wrap"><table><thead><tr><th></th><th>History read</th><th>Randomness</th><th>Forecast ahead</th><th class="r">All right</th><th class="r">Strong right</th><th class="r">Unseen half</th><th>Proof</th></tr></thead><tbody>
-          ${best ? row(best, "Best") : ""}${cur && !(best && cur.lookback === best.lookback && cur.temperature === best.temperature && cur.horizon === best.horizon) ? row(cur, "Now") : ""}
-          ${t.rows.filter((r) => ![best, cur].some((x) => x && x.lookback === r.lookback && x.temperature === r.temperature && x.horizon === r.horizon)).slice(0, 6).map((r) => row(r, "")).join("")}
-        </tbody></table></div>
-        <p class="faint small" style="margin:10px 0 12px">"Strong right" = akurasi saat AI yakin (≥65% skenario searah), yaitu sinyal yang dipakai robot. "Unseen half" = akurasi di paruh akhir data yang tidak dipakai saat memilih; inilah angka yang paling jujur. "Proof" sudah dikoreksi karena ${t.tests} kombinasi dicoba sekaligus. Kenaikan harga di periode ini ${p0(t.base_rate_up)} dari waktu, jadi akurasi di bawah itu tidak lebih baik dari menebak "naik" terus. Setelan model berlaku untuk Crypto dan Forex.</p>
-        <div class="toolbar">${best && ok(best) ? `<button class="btn accent" id="tuneApply">Apply best settings</button>` : ""}</div>` + ctl;
-      $("#tuneApply")?.addEventListener("click", async () => {
-        if (!(await modal({ title: "Apply best AI settings?", confirm: "Apply", body: `<p>Model akan membaca ${best.lookback} candle, keacakan ${best.temperature === 1 ? "normal" : "rendah"}, dan meramal ${best.horizon} candle ke depan. Berlaku untuk semua pair Crypto dan Forex. Jalankan Backtest lagi sesudahnya.</p>` }))) return;
-        try { const r = await api("/api/tune/apply", { lookback: best.lookback, temperature: best.temperature, horizon: best.horizon }); toast(r.restarted ? "AI settings applied. Bot restarted." : "AI settings applied."); }
-        catch (e) { toast(e.message, "err"); }
-      });
+      const st = TUNE_STATUS[t.status] || TUNE_STATUS.none;
+      const b = t.best, d = b && describeRow(b, TF_SEC[b.tf]);
+      body = `
+        <div class="tune-verdict ${st[0]}">
+          <div><span class="tag ${st[0] === "ok" ? "long" : st[0] === "warn" ? "warn" : "short"}">${st[1]}</span>
+            ${b && t.status === "none" ? `<h3>Belum ada setelan yang terbukti untuk ${esc(t.label)}</h3>
+              <p>Kandidat terbaik di paruh awal (${d.tf}, ramal ${d.ahead}, ${d.when}) benar ${p0(b.train_acc)}, tapi di data yang belum dilihat hanya ${p0(b.test_acc)} dari ${b.test_n}. Itu tanda hasil awalnya kebetulan.</p>` : ""}
+            ${b && t.status !== "none" ? `<h3>${esc(t.label)} ${d.tf} · ramal ${d.ahead} · ${d.when}</h3>
+              <p>Di data yang belum dilihat AI benar <b>${p0(b.test_acc)}</b> dari ${b.test_n} ramalan${b.test_p != null ? ` (peluang kebetulan ${b.test_p < 0.001 ? "<0,1%" : nf(b.test_p * 100, 1) + "%"})` : ""}. Di paruh awal: ${p0(b.train_acc)} dari ${b.train_n}. Baca ${d.hist}, keacakan ${d.rand}. ${st[2]}</p>` : ""}${!b ? `<h3>Belum ada kombinasi yang layak dinilai</h3>` : ""}
+            ${t.status === "none" ? `<p class="small">Artinya AI belum punya keunggulan nyata di ${esc(t.label)} pada periode ini. Itu informasi penting: <b>jangan serahkan pair ini ke robot</b>, atau coba lagi dengan ${t.tfs.length > 1 ? "lebih banyak titik uji" : "<b>All timeframes</b>"}. Pair lain di Scanner mungkin lebih mudah ditebak.</p>` : ""}
+          </div>
+          ${b && t.status !== "none" ? `<button class="btn accent" id="tuneApply">Apply this setting</button>` : ""}
+        </div>
+        ${t.tf_best?.length > 1 ? `<div class="tf-cards">${t.tf_best.map((r) => { const s2 = TUNE_STATUS[r.status]; const dd = describeRow(r, TF_SEC[r.tf]);
+          return `<div class="tfc ${s2[0]}"><b>${dd.tf}</b><span class="big ${r.test_acc >= 0.55 ? "up" : r.test_acc < 0.5 ? "down" : ""}">${p0(r.test_acc)}</span><small>${dd.ahead}, ${dd.when}<br>${r.test_n} ramalan uji · ${r.status === "proven" ? "terbukti" : r.status === "promising" ? "menjanjikan" : "belum terbukti"}</small></div>`; }).join("")}</div>` : ""}
+        <details class="tune-more"><summary>Lihat ${Math.min(12, t.rows.length)} kombinasi teratas</summary>
+          <div class="table-wrap"><table><thead><tr><th>TF</th><th>Ramal</th><th>Dipakai</th><th>Riwayat</th><th>Keacakan</th><th class="r">Paruh awal</th><th class="r">Paruh akhir (uji)</th></tr></thead><tbody>
+          ${t.rows.slice(0, 12).map((r) => { const dd = describeRow(r, TF_SEC[r.tf]); return `<tr><td>${dd.tf}</td><td>${dd.ahead}</td><td>${dd.when}</td><td>${dd.hist}</td><td>${dd.rand}</td>
+            <td class="r">${p0(r.train_acc)} <span class="faint">${r.train_n}</span></td><td class="r"><b class="${r.test_acc >= 0.55 ? "up" : r.test_acc < 0.5 ? "down" : ""}">${p0(r.test_acc)}</b> <span class="faint">${r.test_n}</span></td></tr>`; }).join("")}
+          </tbody></table></div>
+          <p class="faint small">Urutan dari paruh awal saja. Kolom "Paruh akhir" adalah ujian jujurnya: kombinasi yang jatuh di sana kemungkinan hanya kebetulan.</p></details>
+        ${t.notes?.length ? `<p class="faint small">${t.notes.map(esc).join(" · ")}</p>` : ""}`;
     }
+    el.innerHTML = head + body + ctl;
     if (state && state.error) el.insertAdjacentHTML("beforeend", `<div class="notice err" style="margin-top:10px">${esc(state.error)}</div>`);
-    seg($("#tunePts"), { 30: "30", 60: "60", 120: "120" }, String(A.tunePts || 60), (v) => { A.tunePts = Number(v); });
+    A.tuneAll = A.tuneAll ?? true;
+    A.tunePts = A.tunePts || 60;
+    const est = () => {
+      const sys = DOCK.data?.resources;
+      const n = (A.tuneAll ? 3 : 1) * 4 * A.tunePts;
+      $("#tuneEst").textContent = `${nf(n, 0)} ramalan${sys ? "" : ""}. Di CPU bisa puluhan menit, dengan GPU beberapa menit.`;
+    };
+    seg($("#tuneScope"), { this: `This timeframe (${TF[A.tf]})`, all: "All timeframes (1H, 4H, 1D)" }, A.tuneAll ? "all" : "this", (v) => { A.tuneAll = v === "all"; est(); });
+    seg($("#tunePts"), { 30: "30", 60: "60", 120: "120", 200: "200" }, String(A.tunePts), (v) => { A.tunePts = Number(v); est(); });
+    est();
+    $("#tuneApply")?.addEventListener("click", async () => {
+      const b = t.best, d = describeRow(b, TF_SEC[b.tf]);
+      const ok = await modal({ title: "Apply this setting?", confirm: "Apply",
+        body: `<p>Robot ${MKT[M]} akan memakai timeframe <b>${d.tf}</b>${b.threshold ? `, membuka posisi hanya saat AI ≥${Math.round(b.threshold * 100)}% yakin` : ""}. Model AI membaca ${d.hist}, keacakan ${d.rand}, meramal ${d.ahead} ke depan (berlaku juga untuk market lain).</p>${t.status === "promising" ? `<div class="notice warn">Belum terbukti kuat. Coba di Simulation dulu.</div>` : ""}` });
+      if (!ok) return;
+      try { const r = await api("/api/tune/apply", { symbol: A.sym, tf: b.tf, lookback: b.lookback, temperature: b.temperature, horizon: b.horizon, threshold: b.threshold });
+        toast(r.restarted ? "Setting applied. Bot restarted." : "Setting applied."); refreshStatus(); }
+      catch (e) { toast(e.message, "err"); }
+    });
     $("#tuneGo").onclick = (e) => busy(e.currentTarget, async () => {
       if (!(await heavyGuard("tuning"))) return;
       let job;
-      try { job = (await api("/api/tune", { symbol: A.sym, tf: A.tf, points: A.tunePts || 60 })).job; } catch (err) { toast(err.message, "err"); return; }
+      try { job = (await api("/api/tune", { symbol: A.sym, tf: A.tf, points: A.tunePts, all_tf: A.tuneAll })).job; } catch (err) { toast(err.message, "err"); return; }
       const sym = A.sym;
       renderTune("running");
       for (;;) {
@@ -861,7 +921,8 @@ PAGES.chart = async (view, query) => {
         const j = await api(`/api/scan/${job}`).catch(() => null);
         if (!j) continue;
         if (j.finished) { if (j.result) A.tune = j.result; renderTune(j.error ? { error: j.error } : null); if (!j.error) toast("Tuning selesai."); return; }
-        const p = $("#tuneProg"); if (p) p.textContent = `${j.waiting ? "Menunggu giliran AI…" : `Menguji ${j.phase || ""}`} (${j.done}/${j.total})`;
+        const p = $("#tuneProg");
+        if (p) p.textContent = j.cancel ? "Membatalkan…" : j.waiting ? "Menunggu giliran AI…" : `Menguji ${j.phase || ""} · ${j.done}/${j.total} (${j.total ? Math.round((j.done / j.total) * 100) : 0}%)`;
       }
     });
   };
@@ -985,7 +1046,13 @@ PAGES.chart = async (view, query) => {
     if (!v) { toast("Pilih tanggal dan jam dulu.", "err"); return; }
     runTT(Date.parse(v + ":00Z") / 1000);      // input dibaca sebagai jam WIB, sama seperti grafik
   };
-  seg($("#histSeg"), { 0: "Off", 6: "6", 12: "12", 24: "24" }, String(A.histN), (v) => { A.histN = Number(v); store.set("kronos-hist-n", A.histN); if (!A.tt) A.fitted = false; loadCandles(); loadHistory(); });
+  seg($("#histSeg"), { 0: "Off", 6: "6", 12: "12", 24: "24" }, String(A.histN), (v) => { A.histN = Number(v); store.set("kronos-hist-n", A.histN); if (!A.tt) A.fitted = false; renderHistCtl(); loadCandles(); loadHistory(); });
+  function renderHistCtl() {
+    $("#histMode").hidden = !A.histN; $("#histLead").hidden = !A.histN || A.histMode !== "line";
+    seg($("#histMode"), { line: "Line", segments: "Segments" }, A.histMode, (v) => { A.histMode = v; store.set("kronos-hist-mode", v); renderHistCtl(); loadHistory(); });
+    seg($("#histLead"), { 1: "1 ahead", 4: "4 ahead", 12: "12 ahead" }, String(A.histLead), (v) => { A.histLead = Number(v); store.set("kronos-hist-lead", A.histLead); loadHistory(); });
+  }
+  renderHistCtl();
   $("#fcBtn").onclick = (e) => busy(e.currentTarget, async () => {
     try { A.signal = (await api("/api/forecast", { symbol: A.sym, tf: A.tf })).signal; renderVerdict(); drawForecast(); toast(`${labelOf(A.sym)} forecast ready.`); }
     catch (err) { toast(err.message, "err", 7000); }
@@ -1624,6 +1691,8 @@ function renderDock() {
       <div class="dock-head"><h3>Activity</h3><button class="icon-btn sm" id="dockClose" aria-label="Tutup">✕</button></div>
       ${r ? `<div class="meters">${meter("CPU", r.cpu)}${meter("RAM", r.ram_pct, `${nf(r.ram_used_gb, 1)} / ${nf(r.ram_total_gb, 0)} GB`)}${r.gpu ? meter("GPU", r.gpu.pct, `${nf(r.gpu.used_gb, 1)} / ${nf(r.gpu.total_gb, 0)} GB`) : ""}</div>` : `<p class="faint small">Tidak tersambung ke server.</p>`}
       ${(d?.warnings || []).map((w) => `<div class="notice ${w.level === "err" ? "err" : "warn"}">${esc(w.text)}</div>`).join("")}
+      ${r?.panel_model ? `<div class="pm"><div><b>Model AI di panel</b> ${esc(r.panel_model.name)}<br><span class="faint small">${r.panel_model.unload_pending ? "akan dilepas setelah pekerjaan ini selesai" : r.panel_model.in_use ? "sedang dipakai" : `menganggur ${ago(Date.now() / 1000 - (r.panel_model.idle_sec || 0))}, dilepas otomatis setelah 10 menit`}</span></div>
+        <button class="btn xs" id="dockFree" ${r.panel_model.unload_pending ? "disabled" : ""}>Free memory</button></div>` : ""}
       <div class="dock-list">${items.length ? items.map((i) => `
         <div class="ditem ${i.error ? "bad" : ""} ${i.finished && !i.error ? "done" : ""}">
           <span class="ic"><svg viewBox="0 0 24 24">${KIND_ICON[i.kind] || KIND_ICON.forecast}</svg></span>
@@ -1646,10 +1715,14 @@ function renderDock() {
   $("#dockBtn").onclick = () => { DOCK.open = !DOCK.open; DOCK.anim = DOCK.open; store.set("kronos-dock-open", DOCK.open); renderDock(); if (DOCK.open) pollActivity(); };
   $("#dockClose")?.addEventListener("click", () => { DOCK.open = false; store.set("kronos-dock-open", false); renderDock(); });
   $$("[data-close]", el).forEach((a) => a.addEventListener("click", () => { if (matchMedia("(max-width: 860px)").matches) { DOCK.open = false; renderDock(); } }));
+  $("#dockFree")?.addEventListener("click", async () => {
+    try { const r = await api("/api/activity/free", {}); toast(r.now ? "Model AI dilepas dari memori." : "Model dilepas begitu pekerjaan AI yang berjalan selesai."); pollActivity(); }
+    catch (e) { toast(e.message, "err"); }
+  });
   $$("[data-cancel]", el).forEach((b) => b.onclick = async () => {
     const stop = b.dataset.kind === "stop";
     const ok = await modal({ title: `${stop ? "Stop" : "Cancel"} ${b.dataset.label}?`, danger: true, confirm: stop ? "Stop" : "Cancel it", cancel: "Keep running",
-      body: stop ? "<p>Robot berhenti. Posisi yang masih terbuka <b>tidak ikut ditutup</b> dan tidak dijaga robot.</p>" : "<p>Proses dihentikan. Hasil yang sudah selesai tetap tersimpan.</p>" });
+      body: stop ? "<p>Robot berhenti. Posisi yang masih terbuka <b>tidak ikut ditutup</b> dan tidak dijaga robot.</p>" : "<p>Proses dihentikan setelah potongan yang sedang dihitung selesai (biasanya beberapa detik), lalu model AI dilepas dari memori. Hasil yang sudah selesai tetap tersimpan.</p>" });
     if (!ok) return;
     try { await api("/api/activity/cancel", { id: b.dataset.cancel }); toast(stop ? "Robot dihentikan." : "Dibatalkan."); pollActivity(); refreshStatus(); }
     catch (e) { toast(e.message, "err"); }

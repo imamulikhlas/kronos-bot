@@ -364,6 +364,19 @@ pre.log { margin: 10px 0 0; padding: 12px; background: var(--card); border: 1px 
 .clock { font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .clock b { color: var(--ink); font-weight: 650; }
 
+/* ---------------- tune ---------------- */
+.tune-verdict { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 16px 18px; border-radius: 16px; border: var(--edge); margin-bottom: 14px; }
+.tune-verdict.ok { background: var(--up-soft); box-shadow: 4px 4px 0 var(--up); } .tune-verdict.warn { background: var(--warn-soft); box-shadow: 4px 4px 0 var(--warn); } .tune-verdict.err { background: var(--card-2); box-shadow: 4px 4px 0 var(--ink); }
+.tune-verdict h3 { margin: 8px 0 4px; font: 800 22px/1.15 var(--display); letter-spacing: -.035em; }
+.tune-verdict p { margin: 4px 0 0; color: var(--ink-2); font-size: 14px; max-width: 80ch; }
+.tf-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.tfc { display: grid; gap: 2px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--card-2); }
+.tfc .big { font: 800 30px/1 var(--display); letter-spacing: -.05em; } .tfc small { color: var(--ink-3); font-size: 12px; }
+.tfc.ok { border-color: var(--up); }
+.tune-more summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
+.tune-ctl { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+@media (max-width: 860px) { .tune-verdict { flex-direction: column; align-items: flex-start; } }
+
 /* ---------------- time travel ---------------- */
 .ttbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: -4px 0 16px; padding: 10px 12px; border-radius: 14px; border: 1px dashed var(--line-2); }
 .ttbar .grow { flex: 1; }
@@ -518,6 +531,7 @@ details.how { margin-top: 16px; } details.how summary { cursor: pointer; } detai
 .meter.warn .mbar i { background: var(--warn); } .meter.err .mbar i { background: var(--down); }
 .meter small { font-size: 11px; color: var(--ink-3); }
 .dock-list { display: grid; gap: 8px; }
+.pm { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13px; padding: 10px 12px; border-radius: 12px; border: 1px dashed var(--line-2); }
 .ditem { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--card-2); }
 .ditem .ic { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--acc); color: var(--acc-ink); border: 1.5px solid var(--ink); }
 .ditem .ic svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; }
