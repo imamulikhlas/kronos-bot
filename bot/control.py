@@ -120,12 +120,18 @@ def backtest_running() -> bool:
     return _alive(BT_PID, "backtest.py")
 
 
-def start_backtest(symbol: str, tf: str, candles: int, every: int, optimize: bool = False):
+def start_backtest(symbols, tf: str, candles: int, every: int, optimize: bool = False,
+                   device: str = "auto", folds: int = 0):
     if backtest_running():
         return
-    args = ["backtest.py", symbol, "--tf", tf, "--candles", str(candles), "--every", str(every)]
+    if isinstance(symbols, str):
+        symbols = [symbols]
+    args = ["backtest.py", *symbols, "--tf", tf, "--candles", str(candles), "--every", str(every),
+            "--device", device]
+    if folds:
+        args += ["--folds", str(folds)]
     if optimize:
-        args.append("--optimasi")
+        args.append("--optimize")
     _spawn(args, BT_PID, BT_LOG, append=False)
 
 

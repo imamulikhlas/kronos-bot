@@ -45,6 +45,35 @@ Tiap market punya robot sendiri: tombol Start/Stop, mode Simulation/Live, saldo 
 
 **Account** (pojok kanan atas) untuk API key Tokocrypto dan koneksi MetaTrader 5. Tombol bulan untuk tema terang/gelap.
 
+## Backtest lab: seberapa akurat, setelan mana yang terbaik
+
+Buka **Backtest** di market yang kamu pilih, centang beberapa pair sekaligus, lalu tekan **Run backtest**. Tiap hasil dapat nilai **A sampai D**:
+
+| Nilai | Artinya |
+|---|---|
+| A | Semua pemeriksaan lolos. Layak dicoba live dengan modal kecil |
+| B | Ada harapan. Lanjutkan di Simulation dulu |
+| C | Lemah, bisa jadi kebetulan. Jangan dipakai live |
+| D | Hindari |
+
+Nilai A atau B hanya mungkin kalau dua syarat ini lolos: arah ramalan AI **terbukti lebih baik dari lempar koin** (uji statistik), dan hasil **walk-forward** positif.
+
+Yang dicek di backtest:
+- **AI accuracy:** persentase arah benar, akurasi sinyal kuat, kalibrasi peluang (kalau AI bilang 70% naik, apakah memang naik sekitar 70%), dan error besar gerakan dibanding menebak "tidak bergerak".
+- **Per segmen waktu:** periode dibagi beberapa bagian. Setelan yang bagus untung di sebagian besar bagian, bukan cuma sekali beruntung.
+- **Walk-forward:** setelan dipilih hanya dari data sebelumnya, lalu diuji di data sesudahnya. Ini perkiraan paling jujur.
+- **Monte Carlo:** urutan trade diacak ribuan kali untuk melihat rentang hasil dan peluang rugi.
+- Eksekusi dibuat realistis: order di harga open candle berikutnya, fee/spread dan slippage dihitung, dan kalau stop-loss serta target tersentuh di candle yang sama, dianggap kena stop-loss.
+
+Tab **Best settings** mengurutkan setelan dari yang paling konsisten. Tombol **Apply** langsung memakainya untuk robot market itu.
+
+### Pakai GPU (VGA)
+
+- **NVIDIA (Windows):** `MULAI.bat` otomatis memasang PyTorch versi GPU kalau kartu NVIDIA terdeteksi (sekali saja, sekitar 2–3 GB). Kalau gagal, hapus file `.venv\gpu_checked` lalu jalankan MULAI lagi.
+- **Mac Apple Silicon (M1/M2/M3/M4):** GPU Metal dipakai otomatis.
+- Pilih **Compute → GPU** di Backtest, atau **Settings → AI model & compute** untuk robot. Dengan GPU, banyak titik waktu diramal sekaligus, biasanya 10–30× lebih cepat. Itu cukup untuk model **Accurate** dan 30–50 skenario ramalan.
+- GPU AMD dan Intel belum didukung, jadi robot tetap memakai CPU.
+
 ## Forex lewat MetaTrader 5 (Windows)
 
 1. Bikin akun di broker forex yang pakai **MetaTrader 5**. Mulai dari **akun demo gratis** dulu.

@@ -160,7 +160,32 @@ def sig_dict(sig: Signal, venue_c: dict, source: str):
     d = dict(sig.__dict__)
     d.update(direction=sig.direction, would=side, decision=why, source=source, venue=venue,
              label=display(sig.symbol), t0=wib_epoch(sig.time))
+    d["calibrated"] = calibrated(sig, venue_c.get("timeframe"))
     return d
+
+
+def calibrated(sig: Signal, tf):
+    """'Waktu AI seyakin ini di backtest, harga benar-benar naik X% dari N kali.'"""
+    p = sig.prob_up_raw if sig.prob_up_raw != 0.5 or not (sig.prob_up + sig.prob_down) else \
+        sig.prob_up + (1 - sig.prob_up - sig.prob_down) / 2
+    best = None
+    for f in BT_DIR.glob(f"{sig.symbol.replace('/', '')}_*_meta.json") if BT_DIR.exists() else []:
+        if f.name.endswith("_dummy_meta.json"):
+            continue
+        try:
+            m = json.loads(f.read_text())
+        except Exception:  # noqa: BLE001
+            continue
+        if tf and m.get("tf") != tf:
+            continue
+        if best is None or f.stat().st_mtime > best[0]:
+            best = (f.stat().st_mtime, m)
+    if not best:
+        return None
+    for b in (best[1].get("quality") or {}).get("calibration") or []:
+        if b["from"] <= p < b["to"] or (p >= 1 and b["to"] >= 1):
+            return {"p": p, "actual_up": b["actual"], "n": b["n"], "from": b["from"], "to": b["to"]}
+    return None
 
 
 def signal_from_row(row) -> Signal:
@@ -400,7 +425,8 @@ def get_config(venue: str):
     return {"venue": venue, "symbols": v["symbols"], "watchlist": v["watchlist"], "timeframe": v["timeframe"],
             "mode": v["mode"], "source": v.get("source"), "risk": v["risk"], "paper_balance": v["paper_balance"],
             "strategy": strat(venue_cfg(c, venue), venue),
-            "model": {"size": model, "n_paths": c["model"]["n_paths"], "pred_len": c["model"]["pred_len"]}}
+            "model": {"size": model, "n_paths": c["model"]["n_paths"], "pred_len": c["model"]["pred_len"],
+                      "lookback": c["model"]["lookback"], "device": c["model"].get("device", "auto")}}
 
 
 STRAT_TYPES = {"fee_pct": float, "min_expected_return_pct": float, "min_prob_up": float, "stop_loss_pct": float,
@@ -465,9 +491,16 @@ def save_config(venue: str, body: dict = Body(...)):
     m = body.get("model") or {}
     if m.get("size") in MODELS:
         c["model"]["name"], c["model"]["tokenizer"] = MODELS[m["size"]]
-    for k in ("n_paths", "pred_len"):
+    for k, lo, hi in (("n_paths", 2, 100), ("pred_len", 2, 120), ("lookback", 64, 2048)):
         if k in m:
-            c["model"][k] = int(m[k])
+            try:
+                c["model"][k] = max(lo, min(hi, int(m[k])))
+            except (TypeError, ValueError):
+                fail(f"Nilai {k} tidak valid.")
+    if "mini" not in c["model"]["name"]:
+        c["model"]["lookback"] = min(int(c["model"]["lookback"]), 512)
+    if m.get("device") in ("auto", "gpu", "cpu"):
+        c["model"]["device"] = m["device"]
     return {"ok": True, "restarted": save_and_restart(c, venue)}
 
 
@@ -633,7 +666,7 @@ def run_forecast(symbol, tf) -> Signal:
     if len(hist) < 100:
         raise RuntimeError(f"data hanya {len(hist)} candle")
     y = data.future_ts(hist["timestamps"].iloc[-1], tf, int(m["pred_len"]))
-    key = (m["name"], m["tokenizer"], m["n_paths"])
+    key = (m["name"], m["tokenizer"], m["n_paths"], m.get("device", "auto"))
     with _fc_lock:
         if _forecaster["key"] != key:
             _forecaster["obj"] = KronosForecaster({**m, "device": m.get("device", "auto")})
@@ -735,15 +768,52 @@ def history(venue: str, mode: str | None = None):
 
 
 # ===================================================================== backtest
+_sys = {"t": 0, "v": None}
+
+
+@app.get("/api/system")
+def system():
+    """Perangkat komputasi (GPU/CPU) dan kecepatan backtest terakhir per perangkat."""
+    if time.time() - _sys["t"] > 60 or _sys["v"] is None:
+        from bot.forecast import system_info
+        _sys["v"], _sys["t"] = system_info(), time.time()
+    speeds = {}
+    if BT_DIR.exists():
+        for f in sorted(BT_DIR.glob("*_meta.json"), key=lambda p: p.stat().st_mtime):
+            try:
+                sp = json.loads(f.read_text()).get("speed") or {}
+            except Exception:  # noqa: BLE001
+                continue
+            if sp.get("sec_per_point") and not f.name.endswith("_dummy_meta.json"):
+                kind = "cpu" if str(sp.get("device", "cpu")) == "cpu" else "gpu"
+                speeds[kind] = {"sec_per_point": sp["sec_per_point"], "device_name": sp.get("device_name"),
+                                "model": (json.loads(f.read_text()).get("model") or {}).get("name")}
+    c = full_cfg()
+    return {**_sys["v"], "speeds": speeds, "device_pref": c["model"].get("device", "auto"),
+            "model": {"name": c["model"]["name"], "n_paths": c["model"]["n_paths"],
+                      "pred_len": c["model"]["pred_len"], "lookback": c["model"]["lookback"]}}
+
+
 @app.post("/api/backtest/start")
-def bt_start(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True),
-             candles: int = Body(500, embed=True), speed: int = Body(3, embed=True),
-             optimize: bool = Body(True, embed=True)):
+def bt_start(symbols: list = Body(None, embed=True), symbol: str = Body("", embed=True),
+             tf: str = Body(..., embed=True), candles: int = Body(1000, embed=True),
+             speed: int = Body(1, embed=True), optimize: bool = Body(True, embed=True),
+             device: str = Body("auto", embed=True), folds: int = Body(0, embed=True)):
     if ctl.backtest_running():
         fail("Backtest lain masih berjalan.")
     if not (KRONOS_DIR / "model").exists():
         fail("Setup belum selesai: folder Kronos belum ada.")
-    ctl.start_backtest(symbol, tf, int(candles), max(1, int(speed)), optimize)
+    syms = [x for x in (symbols or [symbol]) if x]
+    if not syms:
+        fail("Pilih minimal satu pair.")
+    if len({venue_of(x) for x in syms}) > 1:
+        fail("Pair crypto dan forex diuji terpisah.")
+    if tf not in TFS:
+        fail("Timeframe tidak dikenal.")
+    if device not in ("auto", "gpu", "cpu"):
+        device = "auto"
+    ctl.start_backtest(syms[:12], tf, max(100, min(10000, int(candles))), max(1, int(speed)), optimize,
+                       device, max(0, min(10, int(folds))))
     return {"ok": True}
 
 
@@ -755,20 +825,36 @@ def bt_stop():
 
 @app.get("/api/backtest/status")
 def bt_status():
-    log = ctl.tail(ctl.BT_LOG, 40)
+    import re
+    log = ctl.tail(ctl.BT_LOG, 400)
     lines = [ln.split("| ", 2)[-1] for ln in log.splitlines() if ln.strip()]
-    pct, phase = None, (lines[-1] if lines else "")
+    pct, phase, device = None, (lines[-1] if lines else ""), None
     for ln in reversed(lines):
-        if "Progres" in ln and "%" in ln:
-            try:
-                pct = float(ln.split("(")[1].split("%")[0])
-            except (IndexError, ValueError):
-                pass
+        mt = re.match(r"Progres\s+(\d+(?:\.\d+)?)%\s*\|\s*(.*)", ln)
+        if mt:
+            pct, phase = float(mt.group(1)), mt.group(2)
             break
+    for ln in lines:
+        if "Perangkat:" in ln:
+            device = ln.split("Perangkat:", 1)[1].split(",")[0].strip()
     running = ctl.backtest_running()
     failed = (not running) and ("Traceback" in log or "Error" in log or "SystemExit" in log) and "SELESAI" not in log
-    return {"running": running, "pct": pct, "phase": phase, "failed": failed,
-            "log": "\n".join(lines[-12:]) if failed else ""}
+    errors = [ln for ln in lines if "dilewati:" in ln]
+    error = ""
+    if failed:
+        last = [ln.strip() for ln in log.splitlines() if ln.strip()]
+        error = last[-1] if last else ""
+        error = error.split("SystemExit:", 1)[-1].strip() if "SystemExit" in error else error
+    return {"running": running, "pct": pct, "phase": phase, "failed": failed, "device": device, "error": error,
+            "warnings": errors[-5:], "log": "\n".join(lines[-12:]) if failed else ""}
+
+
+def _meta(name):
+    f = BT_DIR / f"{name}_meta.json"
+    try:
+        return json.loads(f.read_text()) if f.exists() else {}
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 @app.get("/api/{venue}/backtest/results")
@@ -780,15 +866,26 @@ def bt_results(venue: str):
     out = []
     for f in files:
         name = f.name.replace("_ringkasan.txt", "")
-        meta = BT_DIR / f"{name}_meta.json"
-        m = json.loads(meta.read_text()) if meta.exists() else {}
+        m = _meta(name)
         sym = m.get("symbol") or name.split("_")[0]
         v = m.get("venue") or ("forex" if "USDT" not in sym else "crypto")
         if v != venue:
             continue
+        opf = BT_DIR / f"{name}_optimasi.json"
+        og = None
+        if opf.exists():
+            try:
+                o = json.loads(opf.read_text())
+                og = o.get("grade") if o.get("version") == 2 else None
+            except Exception:  # noqa: BLE001
+                og = None
+        g = og or m.get("grade") or {}
         out.append({"name": name, "symbol": sym, "label": display(sym) if m else sym, "tf": m.get("tf", ""),
                     "dummy": name.endswith("_dummy"), "return_pct": (m.get("metrics") or {}).get("return_pct"),
-                    "has_opt": (BT_DIR / f"{name}_optimasi.json").exists(),
+                    "hit": (m.get("accuracy") or {}).get("hit"), "n": (m.get("accuracy") or {}).get("n"),
+                    "grade": g.get("letter"), "grade_label": g.get("label"),
+                    "has_opt": og is not None, "candles": m.get("candles"),
+                    "device": (m.get("speed") or {}).get("device_name"),
                     "updated": time.strftime("%d %b, %H:%M", time.localtime(f.stat().st_mtime))})
     return {"results": out}
 
@@ -809,27 +906,34 @@ def bt_result(name: str):
     if "/" in name or ".." in name or not f.exists():
         fail("Hasil tidak ditemukan.", 404)
     res = {"name": name, "summary": f.read_text(encoding="utf-8").splitlines()}
-    meta = BT_DIR / f"{name}_meta.json"
-    if meta.exists():
-        m = json.loads(meta.read_text())
+    m = _meta(name)
+    if m:
         res.update(symbol=m["symbol"], label=display(m["symbol"]), venue=m["venue"], tf=m["tf"],
                    metrics=m["metrics"], accuracy=m["accuracy"])
+        for k in ("quality", "segments", "montecarlo", "grade", "speed", "model", "period", "candles", "folds"):
+            res[k] = m.get(k)
     eqf, trf, opf = BT_DIR / f"{name}_equity.csv", BT_DIR / f"{name}_trades.csv", BT_DIR / f"{name}_optimasi.json"
     if eqf.exists():
         cv = pd.read_csv(eqf)
         start_bal = float(cv["equity"].iloc[0]) if len(cv) else 1.0
         res["equity"] = series(cv["timestamps"], cv["equity"])
         res["buyhold"] = series(cv["timestamps"], start_bal * cv["close"] / float(cv["close"].iloc[0]))
-        res["period"] = [str(cv["timestamps"].iloc[0])[:16], str(cv["timestamps"].iloc[-1])[:16]]
+        res["period"] = res.get("period") or [str(cv["timestamps"].iloc[0])[:16], str(cv["timestamps"].iloc[-1])[:16]]
     if trf.exists() and trf.stat().st_size > 5:
         res["trades"] = records(pd.read_csv(trf))
     if opf.exists():
         o = json.loads(opf.read_text())
-        v = o.get("venue", venue_of(o["symbol"]))
-        o["setelan_sekarang"]["desc"] = describe(o["setelan_sekarang"]["params"], v)
-        for r in o["terbaik"]:
-            r["desc"] = describe(r["params"], v)
-        res["optim"] = o
+        if o.get("version") == 2:
+            v = o.get("venue", venue_of(o["symbol"]))
+            o["current"]["desc"] = describe(o["current"]["params"], v)
+            for r in o["candidates"]:
+                r["desc"] = describe(r["params"], v)
+            for w in o["walk_forward"]["steps"]:
+                if w.get("params"):
+                    w["desc"] = describe(w["params"], v)
+            res["optim"] = o
+        else:
+            res["optim_old"] = True
     return res
 
 
@@ -839,11 +943,12 @@ def bt_apply(name: str = Body(..., embed=True), k: int = Body(..., embed=True)):
     if "/" in name or not opf.exists():
         fail("Hasil optimasi tidak ditemukan.", 404)
     o = json.loads(opf.read_text())
-    if not (1 <= k <= len(o["terbaik"])):
+    cands = o.get("candidates") or []
+    if not (1 <= k <= len(cands)):
         fail("Kandidat tidak ada.")
     venue = o.get("venue", venue_of(o["symbol"]))
     c = full_cfg()
-    p = o["terbaik"][k - 1]["params"]
+    p = cands[k - 1]["params"]
     c[venue]["strategy"].update({x: v for x, v in p.items() if x in STRAT_TYPES and v is not None})
     if venue == "crypto":
         c[venue]["strategy"].pop("allow_short", None)

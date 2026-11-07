@@ -2,6 +2,7 @@
 # Robot Trading Kronos — untuk macOS / Linux. Klik dua kali (macOS) atau jalankan: bash mulai.command
 cd "$(dirname "$0")" || exit 1
 export PYTHONUTF8=1
+export PYTORCH_ENABLE_MPS_FALLBACK=1
 if [ ! -f .venv/setup_ok ]; then
   echo "=== Persiapan pertama kali (5-15 menit, hanya sekali) ==="
   PY=$(command -v python3.11 || command -v python3.12 || command -v python3)

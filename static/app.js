@@ -117,7 +117,7 @@ function makeChart(el, fmt, extra = {}) {
     ...extra,
   });
 }
-const PALETTE = () => [cssv("--acc"), "#E07A2E", "#1F9E89", "#C2477B", "#6B7A90", "#B08A1E", "#3FA0D8", "#8E5B3A"];
+const PALETTE = () => [cssv("--acc-text"), "#E07A2E", "#1F9E89", "#C2477B", "#6B7A90", "#B08A1E", "#3FA0D8", "#8E5B3A"];
 
 /* ===================================================================== router & status */
 const S = { status: null, pairs: {} };
@@ -251,12 +251,12 @@ PAGES.start = (view) => {
           <span class="ic"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M9.5 8h4a2 2 0 0 1 0 4h-4m0 0h4.5a2 2 0 0 1 0 4H9.5V8M11 6.5V8m0 8v1.5"/></svg></span>
           <h2>Crypto</h2>
           <ul><li>BTC, ETH, SOL, dan ratusan koin lain di Tokocrypto</li><li>Spot: robot hanya Buy lalu Sell untuk menutup</li><li>Pasar buka 24 jam, gerak harga lebih liar</li><li>Modal tetap per posisi (USDT)</li></ul>
-          <div class="foot"><span class="faint small" id="cInfo"></span><span class="btn accent" style="--acc:#3D4BE0;--acc-ink:#fff">Open Crypto</span></div></a>
+          <div class="foot"><span class="faint small" id="cInfo"></span><span class="btn dark" style="background:#17171A;color:#fff;box-shadow:3px 3px 0 #fff">Open Crypto</span></div></a>
         <a class="mcard forex" href="#/forex/overview">
           <span class="ic"><svg viewBox="0 0 24 24"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg></span>
           <h2>Forex</h2>
           <ul><li>EUR/USD, GBP/USD, USD/JPY, emas (XAU/USD), dan lainnya</li><li>Bisa Buy dan Sell, lewat MetaTrader 5</li><li>Pasar buka Senin–Jumat, gerak harga lebih halus</li><li>Ukuran lot dihitung dari risiko per posisi</li></ul>
-          <div class="foot"><span class="faint small" id="fInfo"></span><span class="btn accent" style="--acc:#7442CF;--acc-ink:#fff">Open Forex</span></div></a>
+          <div class="foot"><span class="faint small" id="fInfo"></span><span class="btn dark" style="background:#17171A;color:#fff;box-shadow:3px 3px 0 #fff">Open Forex</span></div></a>
       </div>
     </div>`;
   refreshStatus().then((s) => {
@@ -287,7 +287,7 @@ PAGES.overview = (view) => {
       </div>
     </div>`;
   const chart = makeChart($("#eqChart"), "$"); cur.charts.push(chart);
-  const eqS = chart.addAreaSeries({ lineColor: cssv("--acc"), topColor: hexA(cssv("--acc"), 0.16), bottomColor: hexA(cssv("--acc"), 0), lineWidth: 2, priceLineVisible: false });
+  const eqS = chart.addAreaSeries({ lineColor: cssv("--acc-text"), topColor: hexA(cssv("--acc-text"), 0.16), bottomColor: hexA(cssv("--acc-text"), 0), lineWidth: 2, priceLineVisible: false });
   let eqLen = -1;
 
   const renderAuto = () => {
@@ -538,7 +538,7 @@ PAGES.chart = async (view, query) => {
       <section class="card">
         <div class="price-line"><span id="phSym" style="font-size:18px"></span><span class="px" id="phPx">–</span><span id="phChg"></span><span class="faint small" id="phTime" style="margin-left:auto"></span></div>
         <div class="chart" id="mainChart"></div><div class="chart rsi" id="rsiChart"></div>
-        <div class="legend"><span><i style="background:var(--acc)"></i>AI forecast</span><span><i style="background:repeating-linear-gradient(90deg,var(--acc) 0 4px,transparent 4px 7px);opacity:.7"></i>forecast range</span><span><i style="background:var(--ink-3)"></i>EMA 50</span><span><i style="background:var(--ink)"></i>EMA 200 (trend)</span><span><i style="background:var(--ink-2);height:2px"></i>RSI</span></div>
+        <div class="legend"><span><i style="background:var(--acc-text)"></i>AI forecast</span><span><i style="background:repeating-linear-gradient(90deg,var(--acc-text) 0 4px,transparent 4px 7px);opacity:.7"></i>forecast range</span><span><i style="background:var(--ink-3)"></i>EMA 50</span><span><i style="background:var(--ink)"></i>EMA 200 (trend)</span><span><i style="background:var(--ink-2);height:2px"></i>RSI</span></div>
       </section>
       <section class="card" id="verdict"></section>
     </div>`;
@@ -553,7 +553,7 @@ PAGES.chart = async (view, query) => {
     const rsiC = makeChart($("#rsiChart"), (v) => Math.round(v), { timeScale: { visible: false } });
     rsiC.applyOptions({ layout: { attributionLogo: false } });
     cur.charts.push(main, rsiC);
-    const up = cssv("--up"), down = cssv("--down"), acc = cssv("--acc");
+    const up = cssv("--up"), down = cssv("--down"), acc = cssv("--acc-text");
     const vol = main.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, lastValueVisible: false, priceLineVisible: false });
     main.priceScale("vol").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
     const band = { color: hexA(acc, 0.55), lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false };
@@ -617,6 +617,8 @@ PAGES.chart = async (view, query) => {
         <div><span>Avg move / candle</span><b>${nf(s.atr_pct, 2)}%</b></div>
         <div><span>Accuracy here</span><b>${s.accuracy == null ? "–" : p0(s.accuracy)}</b> <small class="faint">${s.acc_n ? `of ${s.acc_n}` : "not rated"}</small></div></div>
       <div class="notice ${note[0]}" style="display:block"><b style="display:block">${note[1]}</b>${esc(s.decision)}</div>
+      ${s.calibrated ? `<div class="notice" style="margin-top:10px">Di backtest, waktu AI seyakin ini (${Math.round(s.calibrated.from * 100)}–${Math.round(Math.min(s.calibrated.to, 1) * 100)}% naik), harga benar-benar naik <b>${p0(s.calibrated.actual_up)}</b> dari ${s.calibrated.n} kali.</div>`
+        : `<p class="faint small" style="margin:10px 0 0">Jalankan Backtest untuk pair ini supaya bisa dicek seberapa sering ramalan seperti ini benar.</p>`}
       <p class="faint small" style="margin:12px 0 0">Kisaran ramalan ${price(s.pred_low, A.sym)} – ${price(s.pred_high, A.sym)}. Ramalan adalah perkiraan, bukan kepastian.</p>`;
   };
   const loadSignal = async () => {
@@ -640,103 +642,273 @@ PAGES.chart = async (view, query) => {
   every(30000, loadSignal);
 };
 
-/* ===================================================================== BACKTEST */
+/* ===================================================================== BACKTEST LAB */
+const CANDLE_OPTS = [500, 1000, 2000, 4000];
+const MODEL_COST = (name) => (/mini/.test(name) ? 0.5 : /base/.test(name) ? 2.5 : 1);
+function span(candles, tf) {
+  const h = (candles * TF_SEC[tf]) / 3600;
+  return h >= 48 ? `${nf(h / 24, 0)} hari` : `${nf(h, 0)} jam`;
+}
+function mins(sec) {
+  if (sec < 90) return `${Math.max(1, Math.round(sec))} detik`;
+  if (sec < 5400) return `${Math.round(sec / 60)} menit`;
+  return `${nf(sec / 3600, 1)} jam`;
+}
+function gradeBadge(g, cls = "") { return `<span class="gbadge ${g || "x"} ${cls}">${g || "–"}</span>`; }
+const GRADE_TXT = {
+  A: "Semua pemeriksaan lolos. Layak dicoba live dengan modal kecil.",
+  B: "Ada harapan, tapi beberapa pemeriksaan belum lolos. Lanjutkan di Simulation dulu.",
+  C: "Lemah. Hasilnya bisa jadi kebetulan. Jangan dipakai live.",
+  D: "Hindari. Di data lama, cara ini merugi atau tidak bisa dinilai.",
+};
+const GRADE_EN = { A: "Ready to try live", B: "Promising", C: "Weak", D: "Avoid" };
+function segDots(segs) { return `<span class="dots" title="untung/rugi per segmen waktu">${(segs || []).map((x) => `<i class="${x.return_pct > 0 ? "p" : x.return_pct < 0 ? "n" : ""}"></i>`).join("")}</span>`; }
+function segBars(items, labels, cls = "") {
+  const mx = Math.max(0.01, ...items.map((v) => Math.abs(v ?? 0))) / 0.72;
+  const fmt = (v) => pct(v, Math.abs(v) < 1 ? 2 : 1);
+  return `<div class="segbars ${cls}">${items.map((v, i) => {
+    const hgt = (Math.abs(v ?? 0) / mx) * 100;
+    return `<div><div class="pos-h">${v > 0 ? `<i style="height:${hgt}%"></i><span class="val up" style="bottom:calc(${hgt}% + 2px)">${fmt(v)}</span>` : ""}</div>
+      <div class="neg-h">${v < 0 ? `<i style="height:${hgt}%"></i><span class="val down" style="top:calc(${hgt}% + 2px)">${fmt(v)}</span>` : v === 0 || v == null ? `<span class="val faint" style="top:4px">0%</span>` : ""}</div>
+      <div class="lab-s">${esc(labels[i] || "")}</div></div>`;
+  }).join("")}</div>`;
+}
+function mcBar(mc) {
+  if (!mc) return `<p class="faint small">Terlalu sedikit trade untuk Monte Carlo.</p>`;
+  const lo = Math.min(mc.p5, 0, mc.p50) - 1, hi = Math.max(mc.p95, 0, mc.p50) + 1;
+  const x = (v) => ((v - lo) / (hi - lo)) * 100;
+  return `<div class="mcbar"><div class="range" style="left:${x(mc.p5)}%;width:${x(mc.p95) - x(mc.p5)}%"></div>
+      <div class="zero" style="left:${x(0)}%"></div><div class="mid" style="left:${x(mc.p50)}%"></div>
+      <span class="t" style="left:${x(mc.p5)}%">${pct(mc.p5, 1)}</span><span class="t" style="left:${x(mc.p95)}%">${pct(mc.p95, 1)}</span></div>
+    <p class="soft small" style="margin:0">Urutan trade diacak ${nf(mc.runs, 0)} kali. 90% hasil jatuh di antara <b>${pct(mc.p5, 1)}</b> dan <b>${pct(mc.p95, 1)}</b>, tengahnya <b>${pct(mc.p50, 1)}</b>. Peluang berakhir rugi <b class="${mc.prob_loss > 0.35 ? "down" : "up"}">${p0(mc.prob_loss)}</b>.</p>`;
+}
+
 PAGES.backtest = async (view) => {
   const m = M;
   const st = mstat() || (await refreshStatus())?.markets[m];
-  const F = { sym: st?.symbols[0]?.symbol || (m === "crypto" ? "BTC/USDT" : "EURUSD"), tf: st?.timeframe || "1h", speed: "3" };
-  let selected = null, wasRunning = false;
+  const [cfg, sys] = await Promise.all([api(`/api/${m}/config`).catch(() => null), api("/api/system").catch(() => null)]);
+  const watch = cfg?.watchlist || (st?.symbols || []).map((x) => x.symbol);
+  const traded = (st?.symbols || []).map((x) => x.symbol);
+  const F = store.get(`kronos-lab-${m}`, null) || {};
+  F.syms = (F.syms || traded).filter((x) => watch.includes(x));
+  if (!F.syms.length) F.syms = watch.slice(0, 1);
+  F.tf = F.tf || st?.timeframe || "1h";
+  F.candles = F.candles || 1000;
+  F.every = F.every || 1;
+  F.device = F.device || (sys?.best && sys.best !== "cpu" ? "gpu" : "auto");
+  F.opt = F.opt ?? true;
+  const save = () => store.set(`kronos-lab-${m}`, F);
+  let selected = null, wasRunning = false, tab = "overview";
+
   view.innerHTML = `
-    <div class="head"><div><h1>Backtest</h1><p>Robot ${MKT[m]} trading pura-pura di data lama dengan setelanmu, lalu dibandingkan dengan beli-dan-tahan. Tidak ada order sungguhan. Akurasinya juga masuk ke rapor Accuracy.</p></div></div>
-    <section class="card" style="margin-bottom:16px">
-      <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:end">
-        <div class="field"><span class="label">Pair</span><div id="btSym"></div></div>
-        <div class="field"><span class="label">Timeframe</span><div id="btTf"></div></div>
-        <div class="field"><label for="btN">Candles</label><div class="unit-wrap"><input id="btN" class="input" type="number" min="100" max="3000" step="50" value="500"><span class="unit">candle</span></div></div>
-        <div class="field"><span class="label">Detail</span><div id="btSpeed"></div></div></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-top:18px">
-        <label class="check"><input type="checkbox" id="btOpt" checked><span class="box"></span><span class="t"><b>Find best settings</b><span>mencoba ratusan kombinasi setelan, hanya beberapa detik tambahan</span></span></label>
-        <button class="btn dark lg" id="btGo" data-busy="Starting…">Run backtest</button></div>
-      <div id="btRun" style="margin-top:14px"></div>
-    </section>
+    <div class="head"><div><h1>Backtest lab</h1><p>Robot ${MKT[m]} trading pura-pura di data lama, lalu dinilai A sampai D. Hasilnya menjawab dua hal: apakah ramalan AI benar-benar tepat di pair ini, dan setelan apa yang paling konsisten.</p></div></div>
+    ${sys?.gpu_unused ? `<div class="notice warn" style="margin-bottom:16px"><b>Kartu grafis NVIDIA terdeteksi, tapi belum dipakai.</b> Tutup panel lalu jalankan MULAI lagi. Versi GPU dipasang otomatis (sekali saja, sekitar 2–3 GB). Kalau sudah pernah dicoba, hapus file <code>.venv\\gpu_checked</code> dulu.</div>` : ""}
+    <div id="runArea"></div>
+    <div class="lab">
+      <section class="card lab-form">
+        <div class="lab-row"><div class="k">Pairs<small>bisa lebih dari satu</small></div><div class="pairpick" id="pp"></div></div>
+        <div class="lab-row"><div class="k">Timeframe</div><div id="tfSeg"></div></div>
+        <div class="lab-row"><div class="k">History<small id="spanTxt"></small></div><div id="cSeg"></div></div>
+        <div class="lab-row"><div class="k">Forecast every</div><div><div id="eSeg"></div><div class="hint" style="margin-top:6px">Tiap candle = paling mirip robot live. Lebih jarang = lebih cepat, tapi lebih kasar.</div></div></div>
+        <div class="lab-row"><div class="k">Compute</div><div class="devices" id="dev"></div></div>
+        <div class="lab-row"><div class="k">Optimize</div>
+          <label class="check"><input type="checkbox" id="opt"><span class="box"></span><span class="t"><b>Find the most consistent settings</b><span>${m === "crypto" ? 432 : 864} kombinasi dinilai per segmen waktu, lalu dicek walk-forward</span></span></label></div>
+      </section>
+      <aside class="card estimate" id="est"></aside>
+    </div>
     <div class="grid" style="grid-template-columns:minmax(220px,280px) minmax(0,1fr);align-items:start" id="btBody">
-      <section class="card"><div class="card-head"><h2>Results</h2></div><div class="results" id="btList"></div></section>
+      <section class="card"><div class="card-head"><h2>Results</h2></div><div class="rlist" id="btList"></div></section>
       <div id="btDetail" class="stack"></div></div>`;
   if (matchMedia("(max-width: 860px)").matches) $("#btBody").style.gridTemplateColumns = "1fr";
-  picker($("#btSym"), { venue: m, value: F.sym, onPick: (p) => (F.sym = p) });
-  seg($("#btTf"), TF, F.tf, (v) => (F.tf = v));
-  seg($("#btSpeed"), { "1": "Detailed", "3": "Normal", "6": "Quick" }, F.speed, (v) => (F.speed = v));
-  $("#btGo").onclick = (e) => busy(e.currentTarget, async () => {
-    try { await api("/api/backtest/start", { symbol: F.sym, tf: F.tf, candles: Number($("#btN").value) || 500, speed: Number(F.speed), optimize: $("#btOpt").checked }); toast("Backtest started."); poll(); }
-    catch (err) { toast(err.message, "err"); }
-  });
+
+  const renderPairs = () => {
+    $("#pp").innerHTML = watch.map((s) => `<button type="button" data-s="${esc(s)}" class="${F.syms.includes(s) ? "on" : ""}" aria-pressed="${F.syms.includes(s)}">${traded.includes(s) ? `<i title="auto trading"></i>` : ""}${esc(labelOf(s))}</button>`).join("")
+      + `<a class="btn ghost sm" href="#/${m}/markets">+ Add pair</a>`;
+    $$("#pp [data-s]").forEach((b) => b.onclick = () => {
+      const s = b.dataset.s;
+      F.syms = F.syms.includes(s) ? F.syms.filter((x) => x !== s) : [...F.syms, s].slice(0, 12);
+      save(); renderPairs(); renderEst();
+    });
+  };
+  const gpuName = sys?.gpu || null;
+  const renderDev = () => {
+    const opts = [
+      ["auto", "Auto", gpuName ? `pakai ${gpuName}` : "pakai CPU, GPU tidak terdeteksi"],
+      ["gpu", "GPU", gpuName ? `${gpuName}${sys.vram_gb ? ` · ${nf(sys.vram_gb, 0)} GB` : ""}` : (sys?.gpu_unused ? "terdeteksi, perlu MULAI ulang" : "tidak terdeteksi")],
+      ["cpu", "CPU", `${sys?.threads || "?"} thread`],
+    ];
+    $("#dev").innerHTML = opts.map(([k, t, d]) => `<button type="button" class="device ${F.device === k ? "on" : ""}" data-d="${k}" ${k === "gpu" && !gpuName ? "disabled" : ""}><b>${t}</b><span>${esc(d)}</span></button>`).join("");
+    $$("#dev [data-d]").forEach((b) => b.onclick = () => { F.device = b.dataset.d; save(); renderDev(); renderEst(); });
+  };
+  const renderEst = () => {
+    const usesGpu = F.device !== "cpu" && gpuName;
+    const kind = usesGpu ? "gpu" : "cpu";
+    const measured = sys?.speeds?.[kind];
+    const mdl = sys?.model || { name: "Kronos-small", n_paths: 10 };
+    const rough = (usesGpu ? 0.06 : 1.6) * MODEL_COST(mdl.name) * (mdl.n_paths / 10);
+    const spp = measured?.sec_per_point || rough;
+    const points = F.syms.length * Math.ceil(F.candles / F.every);
+    $("#spanTxt").textContent = `≈ ${span(F.candles, F.tf)}`;
+    $("#est").innerHTML = `
+      <div class="card-head" style="margin:0"><h2>Estimate</h2><small>${measured ? "dari backtest terakhir" : "perkiraan kasar"}</small></div>
+      <div><div class="big">~${mins(points * spp)}</div><div class="soft small">paling lama. Titik yang sudah pernah diramal diambil dari cache, jadi uji ulang jauh lebih cepat.</div></div>
+      <dl>
+        <div><dt>Forecasts</dt><dd>${nf(points, 0)} titik</dd></div>
+        <div><dt>Pairs</dt><dd>${F.syms.length}</dd></div>
+        <div><dt>Device</dt><dd>${usesGpu ? esc(gpuName) : "CPU"}</dd></div>
+        <div><dt>AI model</dt><dd>${esc(String(mdl.name).split("/").pop())} · ${mdl.n_paths} skenario</dd></div>
+      </dl>
+      <button class="btn dark lg" id="btGo" data-busy="Starting…" ${F.syms.length ? "" : "disabled"}>Run backtest</button>
+      ${!usesGpu ? `<p class="faint small" style="margin:0">Punya kartu grafis NVIDIA? Pilih GPU supaya 10–30× lebih cepat.</p>` : ""}`;
+    $("#btGo").onclick = (e) => busy(e.currentTarget, async () => {
+      try {
+        await api("/api/backtest/start", { symbols: F.syms, tf: F.tf, candles: F.candles, speed: F.every, optimize: F.opt, device: F.device });
+        toast("Backtest started."); poll();
+      } catch (err) { toast(err.message, "err"); }
+    });
+  };
+  renderPairs(); renderDev();
+  seg($("#tfSeg"), TF, F.tf, (v) => { F.tf = v; save(); renderEst(); });
+  seg($("#cSeg"), Object.fromEntries(CANDLE_OPTS.map((n) => [n, nf(n, 0)])), String(F.candles), (v) => { F.candles = Number(v); save(); renderEst(); });
+  seg($("#eSeg"), { 1: "Every candle", 2: "Every 2", 4: "Every 4" }, String(F.every), (v) => { F.every = Number(v); save(); renderEst(); });
+  $("#opt").checked = F.opt;
+  $("#opt").onchange = (e) => { F.opt = e.target.checked; save(); };
+  renderEst();
+
   const poll = async () => {
     let s; try { s = await api("/api/backtest/status"); } catch { return; }
-    if (!$("#btGo")) return;
-    $("#btGo").disabled = s.running;
-    const el = $("#btRun");
+    const el = $("#runArea"); if (!el) return;
+    if ($("#btGo")) $("#btGo").disabled = s.running || !F.syms.length;
     if (s.running) {
-      el.innerHTML = `<div class="progress ${s.pct == null ? "indet" : ""}"><i style="width:${s.pct ?? 30}%"></i></div>
-        <div style="display:flex;justify-content:space-between;gap:10px;margin-top:8px" class="small"><span class="soft">${esc(s.phase)}</span><button class="btn sm ghost" id="btStop">Cancel</button></div>
-        <p class="faint small" style="margin:6px 0 0">Tanpa kartu grafis, 500 candle mode Detailed bisa 20–40 menit. Hasil ramalan disimpan, jadi backtest ulang berikutnya cepat.</p>`;
+      el.innerHTML = `<div class="runbox">
+        <div class="top"><span class="pct">${s.pct == null ? "…" : Math.round(s.pct) + "%"}</span><button class="btn sm" id="btStop">Cancel</button></div>
+        <div class="progress ${s.pct == null ? "indet" : ""}"><i style="width:${s.pct ?? 30}%"></i></div>
+        <div class="soft small">${esc(s.phase || "Menyiapkan…")}${s.device ? ` · <b>${esc(s.device)}</b>` : ""}</div>
+        ${s.warnings?.length ? `<div class="notice warn">${s.warnings.map(esc).join("<br>")}</div>` : ""}</div>`;
       $("#btStop").onclick = async () => { await api("/api/backtest/stop", {}); toast("Backtest cancelled."); poll(); };
       wasRunning = true;
     } else {
-      el.innerHTML = s.failed ? `<div class="notice err" style="display:block"><b>Backtest terakhir gagal.</b><pre class="log">${esc(s.log)}</pre></div>` : "";
+      el.innerHTML = s.failed ? `<div class="notice err" style="margin-bottom:16px"><b>Backtest terakhir gagal:</b> ${esc(s.error || "lihat detail")}
+        <details style="margin-top:6px"><summary class="small" style="cursor:pointer">Detail teknis</summary><pre class="log">${esc(s.log)}</pre></details></div>` : "";
       if (wasRunning) { wasRunning = false; selected = null; loadList(); if (!s.failed) toast("Backtest finished."); }
     }
   };
+
   const loadList = async () => {
     const { results } = await api(`/api/${m}/backtest/results`).catch(() => ({ results: [] }));
     if (!$("#btList")) return;
     $("#btList").innerHTML = results.length ? results.map((r) => `<button data-r="${esc(r.name)}" class="${r.name === selected ? "on" : ""}">
-        <span>${pair(r.label)} <span class="faint small">${esc(TF[r.tf] || r.tf)}</span></span><b class="${tone(r.return_pct)}">${pct(r.return_pct)}</b>
-        <small>${esc(r.updated)}${r.has_opt ? " · optimized" : ""}${r.dummy ? " · random test" : ""}</small></button>`).join("")
-      : `<div class="empty"><b>No results yet</b>Jalankan backtest pertama di atas.</div>`;
+        ${gradeBadge(r.grade)}<span>${pair(r.label)} <span class="faint small">${esc(TF[r.tf] || r.tf)}</span></span><b class="${tone(r.return_pct)}">${pct(r.return_pct, 1)}</b>
+        <small>${r.hit != null ? `arah benar ${p0(r.hit)} · ` : ""}${esc(r.updated)}${r.dummy ? " · ramalan acak" : ""}</small></button>`).join("")
+      : `<div class="empty"><b>No results yet</b>Pilih pair di atas lalu tekan Run backtest.</div>`;
     $$("[data-r]").forEach((b) => b.onclick = () => openResult(b.dataset.r));
     if (!selected && results.length) openResult(results[0].name);
     if (!results.length) $("#btDetail").innerHTML = "";
   };
+
   const openResult = async (name) => {
     selected = name;
     $$("[data-r]").forEach((b) => b.classList.toggle("on", b.dataset.r === name));
-    cur.charts.forEach((c) => c.remove()); cur.charts = [];
     let r; try { r = await api(`/api/backtest/result/${encodeURIComponent(name)}`); } catch (e) { $("#btDetail").innerHTML = `<div class="notice err">${esc(e.message)}</div>`; return; }
-    const mt = r.metrics || {}, acc = r.accuracy || {}, o = r.optim;
-    const beat = mt.return_pct != null && mt.return_pct > mt.buyhold_pct;
-    $("#btDetail").innerHTML = `
-      <section class="card">
-        <div class="card-head"><h2>${pair(r.label || name)} <span class="faint" style="font-size:14px">${esc(TF[r.tf] || "")}</span></h2><small>${r.period ? esc(r.period[0]) + " → " + esc(r.period[1]) : ""}</small></div>
-        <div class="versus"><div><span>Bot return</span><b class="${tone(mt.return_pct)}">${pct(mt.return_pct)}</b></div><div><span>Buy &amp; hold</span><b class="${tone(mt.buyhold_pct)}">${pct(mt.buyhold_pct)}</b></div>
-          <div><span>Max drawdown</span><b class="down">${pct(mt.max_dd_pct)}</b></div><div><span>Trades · win rate</span><b>${mt.trades ?? 0}</b> <small class="faint">${mt.trades ? Math.round(mt.win_pct) + "%" : ""}</small></div></div>
-        <div class="notice ${beat ? "ok" : ""}" style="margin-bottom:14px;display:block">${beat ? "<b>Robot mengalahkan buy &amp; hold</b> di periode ini." : "<b>Robot belum mengalahkan buy &amp; hold</b> di periode ini."}
-          Arah ramalan AI benar <b>${acc.hit == null ? "–" : p0(acc.hit)}</b> dari ${acc.n || 0} ramalan.${r.venue === "forex" ? ` Buy ${mt.longs || 0}, Sell ${mt.shorts || 0}.` : ""}</div>
-        <div class="chart md" id="btEq"></div>
-        <div class="legend"><span><i style="background:var(--acc)"></i>Bot</span><span><i style="background:var(--ink-3)"></i>Buy &amp; hold</span></div></section>
-      ${o ? `<section class="card"><div class="card-head"><h2>Best settings</h2><small>optimization</small></div>
-        <p class="soft small" style="margin-top:0">Setelan dicari di periode <b>train</b> (${esc(o.periode_latih[0].slice(0, 10))} – ${esc(o.periode_latih[1].slice(0, 10))}), lalu diuji di periode <b>test</b> (${esc(o.periode_uji[0].slice(0, 10))} – ${esc(o.periode_uji[1].slice(0, 10))}) yang tidak dipakai saat mencari. Patokannya kolom <b>Test</b>: setelan yang bagus di Train tetapi rugi di Test kemungkinan hanya kebetulan.</p>
-        <div class="table-wrap"><table><thead><tr><th></th><th class="r">Train</th><th class="r">Test</th><th class="r">Trades (test)</th><th>Settings</th><th></th></tr></thead><tbody>
-          ${[["Current", o.setelan_sekarang, 0], ...o.terbaik.map((x, i) => [`Option ${i + 1}`, x, i + 1])].map(([n, x, k]) => `
-          <tr class="${k === 0 ? "mark-row" : ""}"><td><b>${n}</b></td><td class="r ${tone(x.latih.return_pct)}">${pct(x.latih.return_pct)}</td><td class="r ${tone(x.uji.return_pct)}"><b>${pct(x.uji.return_pct)}</b></td>
-            <td class="r">${x.uji.trades} · ${Math.round(x.uji.win_pct)}%</td><td class="wrap">${esc(x.desc.entry)}. ${esc(x.desc.stop)}, ${esc(x.desc.trail)}, ${esc(x.desc.trend)}${x.desc.sides ? ", " + esc(x.desc.sides) : ""}.</td>
-            <td class="r">${k ? `<button class="btn sm ${x.uji.return_pct > 0 ? "dark" : ""}" data-apply="${k}">Apply</button>` : ""}</td></tr>`).join("")}
-        </tbody></table></div></section>` : ""}
-      ${r.trades?.length ? `<section class="card"><div class="card-head"><h2>Trades</h2><small>${r.trades.length}</small></div><div class="table-wrap" style="max-height:420px;overflow:auto"><table><thead><tr><th>Opened</th><th>Side</th><th class="r">Entry</th><th>Closed</th><th class="r">Exit</th><th class="r">P&amp;L</th><th>Reason</th></tr></thead><tbody>
+    if (!$("#btDetail")) return;
+    const o = r.optim;
+    const tabs = { overview: "Verdict", ai: "AI accuracy", settings: o ? "Best settings" : null, trades: `Trades (${r.trades?.length || 0})` };
+    if (!tabs[tab]) tab = "overview";
+    $("#btDetail").innerHTML = `<section class="card">
+      <div class="card-head" style="margin-bottom:6px"><h2>${pair(r.label || name)} <span class="faint" style="font-size:14px">${esc(TF[r.tf] || "")}</span></h2>
+        <small>${r.period ? esc(r.period[0]) + " → " + esc(r.period[1]) : ""}${r.speed?.device_name ? ` · ${esc(r.speed.device_name)}` : ""}</small></div>
+      <div class="tabs" role="tablist">${Object.entries(tabs).filter(([, v]) => v).map(([k, v]) => `<button role="tab" data-tab="${k}" class="${k === tab ? "on" : ""}">${v}</button>`).join("")}</div>
+      <div id="tabBody"></div></section>`;
+    $$("[data-tab]").forEach((b) => b.onclick = () => { tab = b.dataset.tab; $$("[data-tab]").forEach((x) => x.classList.toggle("on", x === b)); renderTab(r); });
+    renderTab(r);
+  };
+
+  const renderTab = (r) => {
+    cur.charts.forEach((c) => c.remove()); cur.charts = [];
+    const el = $("#tabBody"), mt = r.metrics || {}, q = r.quality || {}, o = r.optim;
+    if (tab === "overview") {
+      const g = o?.grade || r.grade || {};
+      const best = o?.candidates?.[0];
+      el.innerHTML = `
+        <div class="verdict">${gradeBadge(g.letter, "xl")}
+          <div><h2>${esc(GRADE_EN[g.letter] || "Not rated")}</h2>
+            <p>${esc(GRADE_TXT[g.letter] || "")} ${o ? "Nilai ini untuk <b>setelan terbaik</b> hasil optimasi." : "Nilai ini untuk <b>setelanmu sekarang</b>. Centang Optimize untuk mencari yang lebih baik."}</p></div>
+          <ul class="checks">${(g.checks || []).map((c) => `<li><i class="${c.ok ? "ok" : "no"}">${c.ok ? "✓" : "✕"}</i><span>${esc(c.text)}</span></li>`).join("")}</ul>
+          ${(g.notes || []).map((n) => `<div class="notice warn" style="grid-column:1/-1">${esc(n)}</div>`).join("")}
+        </div>
+        <h3 style="margin:26px 0 10px;font:700 17px/1.2 var(--display)">${best ? "Setelanmu sekarang" : "Hasil robot"} di periode ini</h3>
+        <div class="mgrid">
+          <div><span>Bot return</span><b class="${tone(mt.return_pct)}">${pct(mt.return_pct)}</b><small>buy &amp; hold ${pct(mt.buyhold_pct)}</small></div>
+          <div><span>Max drawdown</span><b class="${mt.max_dd_pct < 0 ? "down" : ""}">${pct(mt.max_dd_pct)}</b><small>turun terdalam</small></div>
+          <div><span>Profit factor</span><b>${mt.profit_factor == null ? "–" : nf(Math.min(mt.profit_factor, 99), 2)}</b><small>bagus di atas 1,2</small></div>
+          <div><span>Sharpe</span><b>${mt.sharpe == null ? "–" : nf(mt.sharpe, 2)}</b><small>untung per risiko, setahun</small></div>
+          <div><span>Trades</span><b>${mt.trades ?? 0}</b><small>${r.venue === "forex" ? `buy ${mt.longs || 0} · sell ${mt.shorts || 0}` : `rata-rata ${nf(mt.avg_held || 0, 1)} candle`}</small></div>
+          <div><span>Win rate</span><b>${mt.trades ? Math.round(mt.win_pct) + "%" : "–"}</b><small>untung ${pct(mt.avg_win_pct, 2)} · rugi ${pct(mt.avg_loss_pct, 2)}</small></div>
+          <div><span>Losing streak</span><b>${mt.max_losing_streak ?? "–"}</b><small>rugi berturut-turut</small></div>
+          <div><span>Time in market</span><b>${mt.exposure_pct == null ? "–" : nf(mt.exposure_pct, 0) + "%"}</b><small>dari semua candle</small></div>
+        </div>
+        <div class="chart md" id="btEq" style="margin-top:16px"></div>
+        <div class="legend"><span><i style="background:var(--acc-text)"></i>Bot</span><span><i style="background:var(--ink-3)"></i>Buy &amp; hold</span></div>
+        ${r.segments?.length ? `<h3 style="margin:24px 0 4px;font:700 17px/1.2 var(--display)">Per segmen waktu</h3>
+          <p class="soft small" style="margin:0 0 12px">Periode dibagi ${r.segments.length} bagian. Setelan yang bagus untung di sebagian besar bagian, bukan cuma satu kali beruntung.</p>
+          ${segBars(r.segments.map((x) => x.return_pct), r.segments.map((_, i) => `Seg ${i + 1}`))}` : ""}
+        <h3 style="margin:24px 0 0;font:700 17px/1.2 var(--display)">Monte Carlo</h3>${mcBar(r.montecarlo)}`;
+      if (r.equity?.length) {
+        const c = makeChart($("#btEq"), "$"); cur.charts.push(c);
+        c.addLineSeries({ color: cssv("--ink-3"), lineWidth: 1.5, lineStyle: 2, priceLineVisible: false, lastValueVisible: false }).setData(r.buyhold);
+        c.addLineSeries({ color: cssv("--acc-text"), lineWidth: 2.5, priceLineVisible: false }).setData(r.equity);
+        c.timeScale().fitContent();
+      }
+    } else if (tab === "ai") {
+      const sig = q.p_value != null && q.p_value < 0.05 && q.hit > 0.5;
+      el.innerHTML = q.n ? `
+        <p class="soft" style="margin-top:0">Dinilai dari ${nf(q.n, 0)} ramalan di periode ini, terlepas dari setelan robot. Ini jawaban jujur untuk pertanyaan "seberapa tepat AI di ${esc(r.label)}?"</p>
+        <div class="mgrid">
+          <div><span>Direction right</span><b class="${q.hit > 0.5 ? "up" : "down"}">${p0(q.hit)}</b><small>${sig ? "terbukti, bukan kebetulan" : `belum terbukti (p=${nf(q.p_value, 2)})`}</small></div>
+          <div><span>Strong signals right</span><b>${q.conf_hit == null ? "–" : p0(q.conf_hit)}</b><small>${q.conf_n || 0} sinyal Up/Down</small></div>
+          <div><span>Probability skill</span><b class="${tone(q.brier_skill)}">${pct(q.brier_skill * 100, 0)}</b><small>vs tebakan rata-rata</small></div>
+          <div><span>Move size error</span><b>${nf(q.mae, 2)}%</b><small>${q.mae_skill >= 0 ? "lebih baik" : "lebih buruk"} dari menebak "tidak bergerak" (${nf(q.mae_naive, 2)}%)</small></div>
+        </div>
+        <h3 style="margin:24px 0 4px;font:700 17px/1.2 var(--display)">Kalibrasi peluang</h3>
+        <p class="soft small" style="margin:0 0 14px">Kalau AI bilang "70% naik", apakah harga memang naik sekitar 70% dari waktu? Garis hitam = yang AI katakan, balok = yang benar-benar terjadi.</p>
+        <div class="calib">${(q.calibration || []).map((b) => `<div class="calib-row"><span>AI ${Math.round(b.from * 100)}–${Math.round(Math.min(b.to, 1) * 100)}% naik</span>
+          <div class="calib-bars"><i style="width:${b.actual * 100}%"></i><u style="left:${b.pred * 100}%"></u></div><b>${p0(b.actual)}</b></div>
+          <div class="faint small" style="margin:-6px 0 0 142px">${b.n} kali</div>`).join("")}</div>
+        <div class="notice" style="margin-top:16px">${sig ? `<b>AI punya keunggulan di pair ini.</b> Arah benar ${p0(q.hit)} dari ${q.n}, peluang ini terjadi cuma karena untung-untungan ${q.p_value < 0.001 ? "kurang dari 0,1%" : nf(q.p_value * 100, 1) + "%"}.`
+          : `<b>Belum terbukti lebih baik dari lempar koin.</b> Coba history lebih panjang, timeframe lain, atau model AI yang lebih besar di Settings.`}</div>`
+        : `<div class="empty">Belum ada ramalan yang bisa dinilai.</div>`;
+    } else if (tab === "settings" && o) {
+      const wf = o.walk_forward || {};
+      const curO = o.current;
+      const cand = (x, i) => `<div class="cand ${i === 1 ? "best" : ""}">
+          <span class="rank">${i ? "#" + i : "Now"}</span>
+          <div><div class="what">${esc(x.desc.entry)}. ${esc(x.desc.stop)}, ${esc(x.desc.trail)}, ${esc(x.desc.trend)}${x.desc.sides ? ", " + esc(x.desc.sides) : ""}.</div>
+            <div class="nums"><span>Return <b class="${tone(x.full.return_pct)}">${pct(x.full.return_pct)}</b></span><span>${segDots(x.segments)} <b>${x.segments.filter((y) => y.return_pct > 0).length}/${x.segments.length}</b> segmen untung</span>
+              <span>${x.full.trades} trade</span><span>PF <b>${nf(Math.min(x.full.profit_factor, 99), 2)}</b></span><span>DD <b class="down">${pct(x.full.max_dd_pct, 1)}</b></span>
+              ${x.montecarlo ? `<span>peluang rugi <b class="${x.montecarlo.prob_loss > 0.35 ? "down" : "up"}">${p0(x.montecarlo.prob_loss)}</b></span>` : ""}</div></div>
+          <div>${i ? `<button class="btn sm ${i === 1 ? "accent" : ""}" data-apply="${i}">Apply</button>` : `<span class="tag">current</span>`}</div></div>`;
+      el.innerHTML = `
+        <div class="grid halves" style="margin-bottom:8px">
+          <div><div class="soft small">Walk-forward test</div><div class="verdict-word ${tone(wf.total_pct) === "up" ? "up" : "down"}" style="font-size:54px">${wf.total_pct == null ? "–" : pct(wf.total_pct, Math.abs(wf.total_pct) < 1 ? 2 : 1)}</div>
+            <p class="soft small" style="margin:0">Untuk tiap segmen, setelan dipilih <b>hanya dari segmen sebelumnya</b> lalu dipakai di segmen itu, persis seperti memakai optimasi ini di dunia nyata. Ini perkiraan paling jujur.</p></div>
+          <div>${segBars((wf.steps || []).map((x) => x.return_pct), (wf.steps || []).map((x) => `Seg ${x.segment + 1}`), "wf")}</div>
+        </div>
+        <h3 style="margin:22px 0 2px;font:700 17px/1.2 var(--display)">Setelan paling konsisten</h3>
+        <p class="soft small" style="margin:0 0 6px">${o.valid} dari ${o.combos} kombinasi layak dinilai. Diurutkan dari hasil rata-rata per segmen, dikurangi ketidakstabilan dan drawdown, bukan dari untung total saja.</p>
+        ${cand(curO, 0)}${o.candidates.map((x, i) => cand(x, i + 1)).join("")}`;
+      $$("[data-apply]").forEach((b) => b.onclick = async () => {
+        const k = Number(b.dataset.apply), x = o.candidates[k - 1];
+        const bad = (wf.total_pct ?? 0) <= 0 || x.consistency < 0.5;
+        const ok = await modal({ title: `Apply option #${k}?`, confirm: "Apply settings",
+          body: `<p>${esc(x.desc.entry)}. ${esc(x.desc.stop)}, ${esc(x.desc.trail)}, ${esc(x.desc.trend)}${x.desc.sides ? ", " + esc(x.desc.sides) : ""}. Berlaku untuk semua pair ${MKT[m]}.</p>${bad ? `<div class="notice err">Hasil walk-forward atau konsistensinya lemah. Lebih aman dicoba di Simulation dulu.</div>` : ""}` });
+        if (!ok) return;
+        try { const res = await api("/api/backtest/apply", { name: selected, k }); toast(res.restarted ? "Settings applied. Bot restarted." : "Settings applied."); } catch (e) { toast(e.message, "err"); }
+      });
+    } else if (tab === "trades") {
+      el.innerHTML = r.trades?.length ? `<div class="table-wrap" style="max-height:520px;overflow:auto"><table><thead><tr><th>Opened</th><th>Side</th><th class="r">Entry</th><th>Closed</th><th class="r">Exit</th><th class="r">P&amp;L</th><th>Reason</th></tr></thead><tbody>
         ${r.trades.map((t) => `<tr><td class="faint">${esc(String(t.entry_time).slice(5, 16))}</td><td>${sideTag(t.side)}</td><td class="r">${price(t.entry_price, r.symbol)}</td><td class="faint">${esc(String(t.exit_time).slice(5, 16))}</td><td class="r">${price(t.exit_price, r.symbol)}</td><td class="r ${tone(t.pnl)}">${sMoney(t.pnl)}</td><td class="soft">${esc(t.exit_reason)}</td></tr>`).join("")}
-        </tbody></table></div></section>` : ""}`;
-    if (r.equity?.length) {
-      const c = makeChart($("#btEq"), "$"); cur.charts.push(c);
-      c.addLineSeries({ color: cssv("--ink-3"), lineWidth: 1.5, lineStyle: 2, priceLineVisible: false, lastValueVisible: false }).setData(r.buyhold);
-      c.addLineSeries({ color: cssv("--acc"), lineWidth: 2.5, priceLineVisible: false }).setData(r.equity);
-      c.timeScale().fitContent();
+        </tbody></table></div>` : `<div class="empty">Tidak ada trade dengan setelan sekarang.</div>`;
     }
-    $$("[data-apply]").forEach((b) => b.onclick = async () => {
-      const k = Number(b.dataset.apply), x = o.terbaik[k - 1];
-      const ok = await modal({ title: `Apply option ${k}?`, confirm: "Apply settings",
-        body: `<p>${esc(x.desc.entry)}. ${esc(x.desc.stop)}, ${esc(x.desc.trail)}, ${esc(x.desc.trend)}${x.desc.sides ? ", " + esc(x.desc.sides) : ""}. Berlaku untuk semua pair ${MKT[m]}.</p>${x.uji.return_pct <= 0 ? `<div class="notice err">Opsi ini <b>rugi di periode Test</b>. Sebaiknya jangan dipakai.</div>` : ""}` });
-      if (!ok) return;
-      try { const res = await api("/api/backtest/apply", { name, k }); toast(res.restarted ? "Settings applied, bot restarted." : "Settings applied."); } catch (e) { toast(e.message, "err"); }
-    });
   };
   loadList();
   every(2500, poll);
@@ -753,8 +925,8 @@ const MODELS = { light: ["Light", "paling cepat, cocok untuk laptop biasa"], bal
 PAGES.settings = async (view) => {
   const m = M;
   view.innerHTML = `<div class="head"><div><h1>${MKT[m]} settings</h1></div></div><div class="card"><div class="empty"><span class="spinner"></span></div></div>`;
-  let saved, acct;
-  try { [saved, acct] = await Promise.all([api(`/api/${m}/config`), api("/api/account")]); } catch (e) { view.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; return; }
+  let saved, acct, sys;
+  try { [saved, acct, sys] = await Promise.all([api(`/api/${m}/config`), api("/api/account"), api("/api/system").catch(() => ({}))]); } catch (e) { view.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; return; }
   const d = structuredClone(saved);
   const presetOf = () => Object.keys(PRESETS[m]).find((k) => PRESETS[m][k][0] === d.strategy.min_expected_return_pct && PRESETS[m][k][1] === d.strategy.min_prob_up) || "custom";
   let presetKey = presetOf();
@@ -816,16 +988,22 @@ PAGES.settings = async (view) => {
           ${num("strategy.min_accuracy_n", { label: "Rated after", unit: "forecasts", step: 5, min: 5 })}
           ${sw("strategy.require_proof", "Require proof first", "jangan trading sebelum jumlah ramalan di atas tercapai")}</div></div>
 
-      <div class="group"><div><h3>AI model</h3><div class="desc">Dipakai robot Crypto dan Forex.</div></div>
-        <div class="choices" id="models">${Object.entries(MODELS).map(([k, t]) => `<button type="button" class="choice" data-model="${k}"><b>${t[0]}</b><span>${t[1]}</span></button>`).join("")}</div></div>
+      <div class="group"><div><h3>AI model &amp; compute</h3><div class="desc">Dipakai robot Crypto dan Forex. Model lebih besar dan lebih banyak skenario biasanya lebih teliti, tapi lebih berat. Dengan GPU, Accurate tetap cepat.</div></div>
+        <div class="stack" style="gap:16px">
+          <div class="choices" id="models">${Object.entries(MODELS).map(([k, t]) => `<button type="button" class="choice" data-model="${k}"><b>${t[0]}</b><span>${t[1]}</span></button>`).join("")}</div>
+          <div class="field"><span class="label">Run the AI on</span><div id="devSeg"></div>
+            <div class="hint">${sys.gpu ? `Terdeteksi: <b>${esc(sys.gpu)}</b>${sys.vram_gb ? ` (${nf(sys.vram_gb, 0)} GB)` : ""}.` : sys.gpu_unused ? "Kartu grafis NVIDIA terdeteksi tapi PyTorch versi CPU. Tutup panel lalu jalankan MULAI lagi untuk memasang versi GPU." : "Tidak ada GPU yang bisa dipakai. Robot memakai CPU."}</div></div>
+          <div class="fields">
+            ${num("model.n_paths", { label: "Forecast scenarios", unit: "paths", step: 1, min: 2, max: 100, hint: "makin banyak, peluang naik/turun makin stabil. GPU: 30–50" })}
+            ${num("model.lookback", { label: "History the AI reads", unit: "candles", step: 16, min: 64, max: 2048, hint: "Light: s/d 2048 · lainnya s/d 512" })}
+            ${num("model.pred_len", { label: "Forecast horizon", unit: "candles", step: 1, min: 2, max: 120 })}</div>
+          <div class="notice">Setelah mengganti model atau jumlah skenario, jalankan Backtest lagi supaya rapor akurasinya sesuai.</div></div></div>
 
       <div class="group"><div><h3>Advanced</h3><div class="desc">Biarkan saja kalau ragu.</div></div>
         <div class="fields">
           ${num("strategy.fee_pct", { label: fx ? "Spread" : "Trading fee", unit: "%", step: fx ? 0.005 : 0.01, hint: fx ? "0,02% kira-kira 2 pip EUR/USD" : "biaya per transaksi Tokocrypto" })}
           ${num("paper_balance", { label: "Simulation balance", unit: "USD", step: 100, min: 1 })}
           ${fx ? num("risk.leverage", { label: "Simulation leverage", unit: "×", step: 1, min: 1 }) : num("risk.max_order_size_quote", { label: "Hard cap per order", unit: "USDT", step: 1, min: 1 })}
-          ${num("model.n_paths", { label: "Forecast scenarios", unit: "paths", step: 1, min: 2, max: 50 })}
-          ${num("model.pred_len", { label: "Forecast horizon", unit: "candles", step: 1, min: 2, max: 120 })}
           ${num("strategy.cooldown_candles", { label: "Cooldown after close", unit: "candles", step: 1 })}
           ${fx ? `<div class="field"><span class="label">Forex data source</span><div id="srcSeg"></div></div>` : ""}</div></div>
 
@@ -873,6 +1051,7 @@ PAGES.settings = async (view) => {
     fill(); derived();
   };
   $("#models").onclick = (e) => { const b = e.target.closest("[data-model]"); if (b) { d.model.size = b.dataset.model; derived(); } };
+  seg($("#devSeg"), { auto: "Auto", gpu: sys.gpu ? `GPU · ${sys.gpu}` : "GPU", cpu: "CPU" }, d.model.device || "auto", (v) => { d.model.device = v; derived(); });
   seg($("#slSeg"), { persen: "Fixed %", atr: "Follow volatility (ATR)" }, d.strategy.sl_mode, (v) => { d.strategy.sl_mode = v; derived(); });
   seg($("#tfSeg"), TF_LONG, d.timeframe, (v) => { d.timeframe = v; derived(); });
   if (fx) seg($("#srcSeg"), { auto: "Auto", mt5: "MetaTrader 5", yahoo: "Yahoo Finance" }, d.source || "auto", (v) => { d.source = v; derived(); });

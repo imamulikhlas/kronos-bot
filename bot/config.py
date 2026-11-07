@@ -21,6 +21,8 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")  # Mac: operasi yang belum didukung GPU jatuh ke CPU
+
 ROOT = Path(__file__).resolve().parent.parent
 KRONOS_DIR = ROOT / "Kronos"
 VENUES = ("crypto", "forex")
