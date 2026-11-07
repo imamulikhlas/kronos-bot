@@ -1,6 +1,7 @@
 .env
 .venv/
 Kronos/
+Kronos
 data/
 logs/
 __pycache__/
