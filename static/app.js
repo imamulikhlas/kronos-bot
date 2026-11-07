@@ -1,6 +1,7 @@
 /* kronos — panel trading (vanilla JS, tanpa build)
    Struktur: pilih market (crypto / forex) -> Overview · Markets · Chart · Backtest · Settings. Account global. */
 "use strict";
+const APP_VERSION = "2026.11.08.2";   // harus sama dengan bot/version.py
 
 /* ===================================================================== utilitas */
 const $ = (s, el = document) => el.querySelector(s);
@@ -63,6 +64,12 @@ async function api(path, body, method) {
   let res;
   try { res = await fetch(path, opt); } catch { throw new Error("Panel tidak tersambung ke server. Pastikan jendela MULAI masih terbuka."); }
   const data = await res.json().catch(() => ({}));
+  const sv = res.headers.get("X-App-Version");
+  if (sv !== APP_VERSION) showStale(sv);
+  if (res.status === 404 && data.detail === "Not Found") {
+    showStale(sv);
+    throw new Error("Fitur ini butuh server versi terbaru. Tutup jendela MULAI (jendela hitam) lalu buka MULAI.bat lagi.");
+  }
   if (!res.ok) throw new Error(data.error || `Gagal (${res.status})`);
   return data;
 }
@@ -87,6 +94,15 @@ function modal({ title, body = "", confirm = "Confirm", danger = false, input = 
     (input ? $("#mi", m) : $("[data-ok]", m)).focus();
   });
 }
+/* panel baru tapi server lama masih jalan (belum restart setelah update) */
+function showStale(serverVersion) {
+  const el = $("#stale"); if (!el || !el.hidden) return;
+  el.hidden = false;
+  el.innerHTML = `<b>Panel sudah diperbarui, tapi server lama masih berjalan.</b> Tutup jendela MULAI (jendela hitam), lalu buka MULAI.bat lagi supaya semua fitur baru bisa dipakai.
+    <span class="faint small">server ${esc(serverVersion || "lama")} · panel ${APP_VERSION}</span> <button class="btn sm" id="staleReload">Reload page</button>`;
+  $("#staleReload").onclick = () => location.reload();
+}
+
 async function busy(btn, fn) {
   if (!btn) return fn();
   const html = btn.innerHTML; btn.disabled = true;

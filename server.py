@@ -23,6 +23,8 @@ from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from bot.version import APP_VERSION
+
 from bot import control as ctl
 from bot.config import KRONOS_DIR, ROOT, VENUES, api_keys, live_unlocked, load_config, path_in_root, venue_cfg
 from bot.forecast import Signal, build_signal
@@ -45,6 +47,16 @@ TF_SEC = {"15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
 POOL = ThreadPoolExecutor(max_workers=6)
 
 app = FastAPI(title="Kronos")
+
+
+@app.middleware("http")
+async def no_stale(request, call_next):
+    """Versi server di tiap respons + jangan simpan file panel di cache browser (supaya update langsung terpakai)."""
+    resp = await call_next(request)
+    resp.headers["X-App-Version"] = APP_VERSION
+    if request.url.path.startswith("/static/") or request.url.path == "/":
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 # ===================================================================== utilitas
@@ -296,7 +308,8 @@ def status():
     has_bt = BT_DIR.exists() and any(BT_DIR.glob("*_ringkasan.txt"))
     sig = q(f"SELECT {VCOL} v, COUNT(*) n FROM signals GROUP BY 1")
     has_sig = dict(zip(sig["v"], sig["n"])) if not sig.empty else {}
-    out = {"setup_ok": (KRONOS_DIR / "model").exists(), "server_time": int(time.time() * 1000), "markets": {}}
+    out = {"setup_ok": (KRONOS_DIR / "model").exists(), "server_time": int(time.time() * 1000), "markets": {},
+           "version": APP_VERSION}
     for v in VENUES:
         out["markets"][v] = {**venue_status(c, v), "has_signals": bool(has_sig.get(v)),
                              "has_backtest": has_bt and any(f.name.startswith(tuple(x.replace("/", "") for x in c[v]["symbols"]))
