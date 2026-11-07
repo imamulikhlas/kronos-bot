@@ -393,7 +393,7 @@ pre.log { margin: 10px 0 0; padding: 12px; background: var(--card); border: 1px 
 .gpubox summary { cursor: pointer; color: var(--ink-2); }
 
 /* ---------------- AI track record ---------------- */
-.hist-ctl { display: inline-flex; align-items: center; gap: 8px; }
+.hist-ctl { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; max-width: 100%; }
 .track { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1.3fr); gap: 18px 28px; align-items: center; }
 .track-dots { display: flex; flex-wrap: wrap; gap: 5px; }
 .track-dots i { width: 16px; height: 16px; border-radius: 5px; background: var(--acc); border: 1px solid var(--ink); }

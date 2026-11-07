@@ -777,9 +777,20 @@ def get_signal(symbol: str, tf: str):
 def forecast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True)):
     if not (KRONOS_DIR / "model").exists():
         fail("Setup belum selesai: folder Kronos belum ada.")
-    job = new_job("forecast", f"Forecast {display(symbol)} {tf.upper()}", venue_of(symbol), symbol=symbol)
+    key = f"forecast:{symbol}:{tf}"
+    dup = find_job(key)
+    if dup:                                       # sama persis sedang dihitung: tunggu hasil itu saja
+        while not dup["finished"]:
+            time.sleep(0.3)
+        hit = _forecasts.get((symbol, tf))
+        if hit and not dup.get("error"):
+            return {"signal": sig_dict(hit[0], vcfg(venue_of(symbol)), "manual forecast", tf)}
+    job = new_job("forecast", f"Forecast {display(symbol)} {tf.upper()}", venue_of(symbol), symbol=symbol, dedupe=key)
     try:
         sig = run_forecast(symbol, tf, job)
+    except Cancelled:
+        end_job(job)
+        fail("Dibatalkan.", 409)
     except Exception as e:  # noqa: BLE001
         end_job(job, str(e))
         fail(f"Gagal meramal {display(symbol)}: {e}", 502)
@@ -826,9 +837,23 @@ def new_job(kind: str, label: str, venue: str | None = None, total: int = 0, hea
     return job
 
 
+def find_job(key: str):
+    """Pekerjaan identik yang masih berjalan -> dipakai ulang, bukan dijalankan dua kali."""
+    return next((j for j in _jobs.values() if j.get("dedupe") == key and not j["finished"] and not j["cancel"]), None)
+
+
+def supersede(group: str):
+    """Permintaan baru di grup yang sama menggantikan yang lama (yang lama berhenti di titik aman berikutnya)."""
+    for j in _jobs.values():
+        if j.get("group") == group and not j["finished"] and not j["cancel"]:
+            j.update(cancel=True, superseded=True)
+
+
 def end_job(job: dict, error: str = ""):
     job.update(finished=True, ended=time.time(), waiting=False)
-    if job.get("cancel"):
+    if job.get("superseded"):
+        job["error"] = "Diganti permintaan baru."
+    elif job.get("cancel"):
         job["error"] = "Dibatalkan."
     if error and not job.get("error"):
         job["error"] = error
@@ -849,10 +874,20 @@ class ai_slot:
         if self.job:
             self.job["waiting"] = True
         _ai_queue["waiting"] += 1
-        _fc_lock.acquire()
-        _ai_queue["waiting"] -= 1
+        try:
+            while not _fc_lock.acquire(timeout=0.3):       # selagi antre, batal/diganti langsung keluar
+                if self.job and self.job.get("cancel"):
+                    if self.job:
+                        self.job["waiting"] = False
+                    raise Cancelled()
+        finally:
+            _ai_queue["waiting"] -= 1
         if self.job:
             self.job["waiting"] = False
+            if self.job.get("cancel"):           # dibatalkan/diganti selagi antre: jangan dihitung sama sekali
+                _forecaster["last"] = time.time()
+                _fc_lock.release()
+                raise Cancelled()
         return self
 
     def __exit__(self, *exc):
@@ -879,11 +914,11 @@ def tune_file(symbol, tf):
 
 @app.get("/api/tune")
 def tune_get(symbol: str, tf: str):
+    run = next((j["id"] for j in _jobs.values() if j["kind"] == "tune" and j.get("symbol") == symbol
+                and j.get("tf") == tf and not j["finished"] and not j["cancel"]), None)
     f = tune_file(symbol, tf)
-    if not f.exists():
-        return {"result": None}
-    r = json.loads(f.read_text())
-    return {"result": r if r.get("version") == 2 else None}
+    r = json.loads(f.read_text()) if f.exists() else None
+    return {"result": r if r and r.get("version") == 2 else None, "running": run}
 
 
 def _tune_tf(job, symbol, tf, m, points, data, configs):
@@ -964,7 +999,13 @@ def tune_start(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=Tr
     points = max(20, min(240, int(points)))
     venue = venue_of(symbol)
     tfs = sorted(set(TUNE_TFS) | {tf}, key=lambda x: TF_SEC[x]) if all_tf else [tf]
-    job = new_job("tune", f"Tune AI {display(symbol)} {'semua TF' if all_tf else tf.upper()}", venue, symbol=symbol)
+    key = f"tune:{symbol}:{tf}:{points}:{all_tf}"
+    dup = find_job(key)
+    if dup:
+        return {"job": dup["id"], "reused": True}
+    supersede("tune")
+    job = new_job("tune", f"Tune AI {display(symbol)} {'semua TF' if all_tf else tf.upper()}", venue, symbol=symbol,
+                  tf=tf, dedupe=key, group="tune")
     jid = job["id"]
 
     def work():
@@ -1099,11 +1140,14 @@ def forecast_at(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=T
             sig = None
     if sig is None:
         y = data.future_ts(hist["timestamps"].iloc[-1], tf, h)
-        job = new_job("timetravel", f"Time travel {display(symbol)}", venue, symbol=symbol)
+        supersede("timetravel")
+        job = new_job("timetravel", f"Time travel {display(symbol)}", venue, symbol=symbol, group="timetravel")
         try:
             with ai_slot(job):
                 job["phase"] = "AI meramal"
                 paths = get_forecaster(m).paths(hist, y)
+        except Cancelled:
+            fail("Diganti permintaan baru.", 409)
         finally:
             end_job(job)
         sig = build_signal(symbol, hist, paths, s["fee_pct"], int(s["trend_period"]))
@@ -1138,7 +1182,13 @@ def hindcast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True
     if tf not in TFS:
         fail("Timeframe tidak dikenal.")
     count = max(3, min(120 if mode == "line" else 40, int(count)))
-    job = new_job("hindcast", f"Past forecasts {display(symbol)} {tf.upper()}", venue_of(symbol), count, symbol=symbol)
+    key = f"hindcast:{symbol}:{tf}:{count}:{mode}:{lead}"
+    dup = find_job(key)
+    if dup:
+        return {"job": dup["id"], "reused": True}
+    supersede("chart-hist")
+    job = new_job("hindcast", f"Past forecasts {display(symbol)} {tf.upper()}", venue_of(symbol), count, symbol=symbol,
+                  dedupe=key, group="chart-hist")
     jid = job["id"]
 
     def work():
@@ -1265,7 +1315,11 @@ def hindcast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True
 @app.post("/api/scan")
 def scan(symbols: list = Body(..., embed=True), tf: str = Body(..., embed=True)):
     venue = venue_of(symbols[0]) if symbols else None
-    job = new_job("forecast_all", f"Forecast {len(symbols)} pairs", venue, len(symbols), symbols=list(symbols))
+    key = f"forecast_all:{tf}:{','.join(sorted(symbols))}"
+    dup = find_job(key)
+    if dup:
+        return {"job": dup["id"], "reused": True}
+    job = new_job("forecast_all", f"Forecast {len(symbols)} pairs", venue, len(symbols), symbols=list(symbols), dedupe=key)
     jid = job["id"]
 
     def work():
@@ -1357,12 +1411,12 @@ def activity():
         if pid:
             pids["Backtest"] = pid
     for j in list(_jobs.values()):
-        if j.get("finished") and now - j.get("ended", now) > 8:
+        if j.get("finished") and (now - j.get("ended", now) > 8 or j.get("superseded")):
             continue
         pct = (j["done"] / j["total"] * 100) if j.get("total") else None
         phase = "Menunggu giliran AI" if j.get("waiting") else (j.get("phase") or j.get("current") or "")
         if j.get("cancel") and not j.get("finished"):
-            phase = "Membatalkan… menunggu potongan yang sedang dihitung selesai"
+            phase = "Diganti permintaan baru, berhenti sebentar lagi" if j.get("superseded") else "Membatalkan…"
         if j.get("current") and j.get("phase") and not j.get("waiting"):
             phase = f"{j['phase']} · {j['current']}"
         link = None
@@ -1373,6 +1427,7 @@ def activity():
         items.append({"id": j["id"], "kind": j["kind"], "venue": j.get("venue"), "label": j["label"], "phase": phase,
                       "pct": pct, "done": j.get("done"), "total": j.get("total"), "started": j.get("started"),
                       "finished": j.get("finished"), "error": j.get("error") or None, "waiting": j.get("waiting"),
+                      "superseded": bool(j.get("superseded")),
                       "busy": not j.get("finished"), "cancel": None if j.get("finished") or j["kind"] in ("forecast", "timetravel") else "cancel",
                       "link": link})
     # sumber daya
@@ -1419,6 +1474,13 @@ def activity():
 def activity_free():
     done = unload_model()
     return {"ok": True, "now": done}
+
+
+@app.post("/api/jobs/cancel_group")
+def jobs_cancel_group(group: str = Body(..., embed=True)):
+    """Halaman ditinggalkan: hentikan pekerjaan miliknya di titik aman berikutnya (tanpa mematikan proses AI)."""
+    supersede(group)
+    return {"ok": True}
 
 
 @app.post("/api/activity/cancel")
@@ -1637,6 +1699,9 @@ def _system_info(refresh=False):
     return _sys["v"]
 
 
+threading.Thread(target=_system_info, daemon=True).start()     # siapkan info perangkat di latar belakang
+
+
 @app.get("/api/system")
 def system(refresh: bool = False):
     """Perangkat komputasi (GPU/CPU) dan kecepatan backtest terakhir per perangkat."""
@@ -1672,7 +1737,10 @@ def benchmark():
     """Ukur kecepatan ramalan di CPU dan di GPU yang terpasang, dengan model AI dari setelan."""
     if not (KRONOS_DIR / "model").exists():
         fail("Setup belum selesai: folder Kronos belum ada.")
-    job = new_job("benchmark", "GPU speed test")
+    dup = find_job("benchmark")
+    if dup:
+        return {"job": dup["id"], "reused": True}
+    job = new_job("benchmark", "GPU speed test", dedupe="benchmark")
     jid = job["id"]
     held = {}
 

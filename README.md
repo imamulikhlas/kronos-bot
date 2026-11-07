@@ -67,6 +67,14 @@ Tombol kecil di pojok kanan bawah selalu menunjukkan berapa proses yang sedang b
 - tombol **Open** ke halamannya, serta **Cancel** atau **Stop**;
 - peringatan kalau beban terlalu berat, dan memori yang dipakai tiap proses.
 
+Supaya tidak ada pekerjaan dobel:
+- Klik berkali-kali (misalnya mengganti pilihan Past forecasts) hanya mengirim **satu** permintaan, setelah pilihanmu berhenti berubah.
+- Permintaan yang sama persis tidak dijalankan dua kali. Tune, Forecast all, tes GPU, dan Run forecast yang identik akan memakai pekerjaan yang sudah berjalan.
+- Permintaan baru **menggantikan** yang lama yang sudah tidak relevan (Past forecasts, Time travel, Tune), dan yang lama langsung keluar dari antrean.
+- Meninggalkan halaman Chart menghentikan Past forecasts dan Time travel milik halaman itu. Tune tetap jalan dan bisa dibatalkan di Activity.
+- Data yang terlambat datang untuk pair yang sudah diganti diabaikan, jadi grafik tidak tertimpa data pair lain.
+- Pembaruan otomatis tidak menumpuk: putaran baru menunggu putaran sebelumnya selesai.
+
 Supaya komputer tidak hang:
 - Ramalan dari panel diantre, jadi tidak berebut. Yang sedang menunggu tampil sebagai "Menunggu giliran AI".
 - Kalau memori sudah sekitar 93%, pekerjaan berat baru (backtest, scanner, robot, dan lainnya) ditahan dulu.

@@ -1,7 +1,7 @@
 /* kronos — panel trading (vanilla JS, tanpa build)
    Struktur: pilih market (crypto / forex) -> Overview · Markets · Chart · Backtest · Settings. Account global. */
 "use strict";
-const APP_VERSION = "2026.11.08.4";   // harus sama dengan bot/version.py
+const APP_VERSION = "2026.11.08.5";   // harus sama dengan bot/version.py
 
 /* ===================================================================== utilitas */
 const $ = (s, el = document) => el.querySelector(s);
@@ -103,6 +103,14 @@ function showStale(serverVersion) {
   $("#staleReload").onclick = () => location.reload();
 }
 
+/* info GPU/CPU: dibaca sekali lalu disimpan; halaman tidak menunggu lebih dari 2,5 detik */
+async function sysInfo() {
+  if (S.sys) return S.sys;
+  const r = await Promise.race([api("/api/system").catch(() => null), new Promise((ok) => setTimeout(() => ok(null), 2500))]);
+  if (r) S.sys = r; else api("/api/system").then((x) => { S.sys = x; }).catch(() => {});
+  return r || {};
+}
+
 async function busy(btn, fn) {
   if (!btn) return fn();
   const html = btn.innerHTML; btn.disabled = true;
@@ -143,15 +151,29 @@ const PALETTE = () => [cssv("--acc-text"), "#E07A2E", "#1F9E89", "#C2477B", "#6B
 /* ===================================================================== router & status */
 const S = { status: null, pairs: {} };
 let M = store.get("kronos-market", null) || null;
-let cur = { timers: [], charts: [] };
+let cur = { timers: [], charts: [], leave: [] };
 /* polling berhenti saat tab tidak terlihat, supaya browser & komputer tidak terbebani */
-function every(ms, fn) { fn(); const id = setInterval(() => { if (!document.hidden) fn(); }, ms); cur.timers.push(id); return id; }
+function every(ms, fn) {
+  // satu putaran baru dimulai hanya kalau putaran sebelumnya sudah selesai (permintaan lambat tidak menumpuk)
+  let running = false;
+  const run = async () => {
+    if (running || document.hidden) return;
+    running = true;
+    try { await fn(); } catch { /* koneksi sesaat */ } finally { running = false; }
+  };
+  run();
+  const id = setInterval(run, ms); cur.timers.push(id); return id;
+}
 function teardown() {
   document.body.classList.remove("savebar-on");
   cur.timers.forEach(clearInterval);
   cur.charts.forEach((c) => { try { c.remove(); } catch { /* sudah dihapus */ } });
-  cur = { timers: [], charts: [] };
+  (cur.leave || []).forEach((fn) => { try { fn(); } catch { /* abaikan */ } });
+  cur = { timers: [], charts: [], leave: [] };
 }
+/* keluar dari halaman: hentikan pekerjaan AI milik halaman itu (bukan Tune/backtest yang memang ditunggu) */
+function onLeave(fn) { (cur.leave = cur.leave || []).push(fn); }
+const cancelGroup = (group) => api("/api/jobs/cancel_group", { group }).catch(() => {});
 const PAGES = {};
 function setMarket(m) {
   M = m; store.set("kronos-market", m);
@@ -552,7 +574,8 @@ PAGES.markets = (view) => {
     } catch (err) { toast(err.message, "err"); }
   });
   loadWatch().then(() => { if (sel && sel.length >= 2) loadCompare(); });
-  const t = setInterval(loadWatch, 45000); cur.timers.push(t);
+  let firstWatch = true;
+  every(45000, () => { if (firstWatch) { firstWatch = false; return; } return loadWatch(); });
 };
 
 /* ===================================================================== SCANNER: seluruh pasar */
@@ -821,10 +844,17 @@ PAGES.chart = async (view, query) => {
       </div>
       <p class="faint small" style="margin:12px 0 0">Garis tebal = sinyal kuat (yang akan dipakai robot), garis tipis putus-putus = ramalan lemah/sideways yang robot abaikan. Hijau = benar, merah = salah. ${sm.n} ramalan masih terlalu sedikit untuk menilai; pakai <b>Tune the AI</b> di bawah untuk menguji puluhan titik.</p>`;
   };
-  const loadHistory = async () => {
-    if (!A.histN) { A.hist = null; drawHistory(); renderHist(); return; }
+  /* klik berkali-kali: tunggu sebentar sampai pilihan berhenti berubah, lalu kirim SATU permintaan.
+     Permintaan lama di server otomatis diganti (tidak menumpuk di antrean). */
+  const loadHistory = () => {
+    clearTimeout(A.histTimer);
     const my = ++A.histJob;
+    if (!A.histN) { A.hist = null; drawHistory(); renderHist(); cancelGroup("chart-hist"); return; }
     renderHist("loading");
+    A.histTimer = setTimeout(() => runHistory(my), 450);
+  };
+  const runHistory = async (my) => {
+    if (my !== A.histJob) return;
     try {
       const { job } = await api("/api/hindcast", { symbol: A.sym, tf: A.tf, count: A.histMode === "line" ? A.histN * 2 : A.histN, mode: A.histMode, lead: A.histLead });
       for (;;) {
@@ -832,6 +862,7 @@ PAGES.chart = async (view, query) => {
         if (my !== A.histJob || !$("#hist")) return;
         const j = await api(`/api/scan/${job}`);
         if (j.finished) {
+          if (j.superseded) return;
           if (j.error) { renderHist({ error: `Gagal meramal ulang: ${j.error}` }); return; }
           A.hist = j.result; drawHistory(); renderHist(); return;
         }
@@ -913,24 +944,35 @@ PAGES.chart = async (view, query) => {
       if (!(await heavyGuard("tuning"))) return;
       let job;
       try { job = (await api("/api/tune", { symbol: A.sym, tf: A.tf, points: A.tunePts, all_tf: A.tuneAll })).job; } catch (err) { toast(err.message, "err"); return; }
-      const sym = A.sym;
-      renderTune("running");
+      pollTune(job, A.sym);
+    });
+  };
+  const pollTune = async (job, sym) => {
+    if (A.tunePolling === job) return;
+    A.tunePolling = job;
+    renderTune("running");
+    try {
       for (;;) {
         await new Promise((r) => setTimeout(r, 1500));
-        if (!$("#tune") || A.sym !== sym) return;
+        if (!$("#tune") || A.sym !== sym || A.tunePolling !== job) return;
         const j = await api(`/api/scan/${job}`).catch(() => null);
         if (!j) continue;
-        if (j.finished) { if (j.result) A.tune = j.result; renderTune(j.error ? { error: j.error } : null); if (!j.error) toast("Tuning selesai."); return; }
+        if (j.finished) { if (j.result) A.tune = j.result; renderTune(j.error && !j.superseded ? { error: j.error } : null); if (!j.error) toast("Tuning selesai."); return; }
         const p = $("#tuneProg");
         if (p) p.textContent = j.cancel ? "Membatalkan…" : j.waiting ? "Menunggu giliran AI…" : `Menguji ${j.phase || ""} · ${j.done}/${j.total} (${j.total ? Math.round((j.done / j.total) * 100) : 0}%)`;
       }
-    });
+    } finally { if (A.tunePolling === job) A.tunePolling = null; }
   };
-  const loadTune = async () => { A.tune = (await api(`/api/tune?symbol=${encodeURIComponent(A.sym)}&tf=${A.tf}`).catch(() => ({}))).result || null; renderTune(); };
+  const loadTune = async () => {
+    const r = await api(`/api/tune?symbol=${encodeURIComponent(A.sym)}&tf=${A.tf}`).catch(() => ({}));
+    A.tune = r.result || null;
+    if (r.running) pollTune(r.running, A.sym); else renderTune();
+  };
   const loadCandles = async () => {
+    const sym = A.sym, tf = A.tf, chart = C;
     try {
-      const d = await api(`/api/candles?symbol=${encodeURIComponent(A.sym)}&tf=${A.tf}&limit=${A.limit || (A.histN > 12 ? 500 : 300)}`);
-      if (!$("#phPx")) return;
+      const d = await api(`/api/candles?symbol=${encodeURIComponent(sym)}&tf=${tf}&limit=${A.limit || (A.histN > 12 ? 500 : 300)}`);
+      if (!$("#phPx") || sym !== A.sym || tf !== A.tf || chart !== C) return;   // jawaban lama untuk pair lain
       step = d.step;
       C.candles.setData(d.candles);
       C.vol.setData(d.volume.map((v) => ({ time: v.time, value: v.value, color: hexA(v.up ? cssv("--up") : cssv("--down"), 0.22) })));
@@ -956,18 +998,20 @@ PAGES.chart = async (view, query) => {
     if (on) toast("Klik candle di grafik untuk melihat ramalan AI saat itu.", "ok", 5000);
   };
   const runTT = async (t) => {
+    const my = (A.ttReq = (A.ttReq || 0) + 1);
     setPick(false);
     const el = $("#verdict");
     if (el) el.innerHTML = `<div class="card-head"><h2>AI view</h2></div><div class="soft"><span class="spinner"></span> AI meramal seolah-olah sekarang ${esc(fmtT(t))}, hanya memakai data sampai candle itu…</div>`;
     try {
       const r = await api("/api/forecast_at", { symbol: A.sym, tf: A.tf, time_s: Math.round(t) });
-      if (!$("#verdict")) return;
+      if (!$("#verdict") || my !== A.ttReq) return;          // sudah ada klik yang lebih baru
       A.tt = r;
       const need = Math.ceil((nowWibSec() - r.as_of) / step) + 80;
       if (need > (A.limit || 300)) { A.limit = Math.min(5000, need); await loadCandles(); }
       drawForecast(); drawHistory(); renderTT();
       C.main.timeScale().setVisibleRange({ from: r.as_of - 90 * step, to: r.as_of + (r.signal.path.length + 25) * step });
     } catch (e) {
+      if (my !== A.ttReq || /Diganti/.test(e.message)) return;
       toast(e.message, "err", 7000);
       renderVerdict();
     }
@@ -1029,7 +1073,11 @@ PAGES.chart = async (view, query) => {
       <p class="faint small" style="margin:12px 0 0">Kisaran ramalan ${price(s.pred_low, A.sym)} – ${price(s.pred_high, A.sym)}. Ramalan adalah perkiraan, bukan kepastian.</p>`;
   };
   const loadSignal = async () => {
-    try { A.signal = (await api(`/api/signal?symbol=${encodeURIComponent(A.sym)}&tf=${A.tf}`)).signal; } catch { A.signal = null; }
+    const sym = A.sym, tf = A.tf;
+    let sig = null;
+    try { sig = (await api(`/api/signal?symbol=${encodeURIComponent(sym)}&tf=${tf}`)).signal; } catch { sig = null; }
+    if (sym !== A.sym || tf !== A.tf) return;
+    A.signal = sig;
     renderVerdict(); drawForecast();
   };
   const switchTo = () => {
@@ -1054,13 +1102,18 @@ PAGES.chart = async (view, query) => {
   }
   renderHistCtl();
   $("#fcBtn").onclick = (e) => busy(e.currentTarget, async () => {
-    try { A.signal = (await api("/api/forecast", { symbol: A.sym, tf: A.tf })).signal; renderVerdict(); drawForecast(); toast(`${labelOf(A.sym)} forecast ready.`); }
-    catch (err) { toast(err.message, "err", 7000); }
+    const sym = A.sym, tf = A.tf;
+    try {
+      const sig = (await api("/api/forecast", { symbol: sym, tf })).signal;
+      if (sym !== A.sym || tf !== A.tf || !$("#verdict")) return;      // pair/timeframe sudah diganti
+      A.signal = sig; renderVerdict(); drawForecast(); toast(`${labelOf(sym)} forecast ready.`);
+    } catch (err) { if (!/Dibatalkan/.test(err.message)) toast(err.message, "err", 7000); }
   });
   renderQuick(); renderVerdict();
   history.replaceState(null, "", `#/${m}/chart?${encodeURIComponent(A.sym)}`);
   loadHistory();
   loadTune();
+  onLeave(() => { A.histJob++; A.ttReq = (A.ttReq || 0) + 1; A.tunePolling = null; cancelGroup("chart-hist"); cancelGroup("timetravel"); });
   every(1000, () => {
     const el = $("#cdown"); if (!el || !A.lastOpen) return;
     const rem = Math.round(A.lastOpen + step - nowWibSec());
@@ -1118,7 +1171,7 @@ function mcBar(mc) {
 PAGES.backtest = async (view) => {
   const m = M;
   const st = mstat() || (await refreshStatus())?.markets[m];
-  const [cfg, sys] = await Promise.all([api(`/api/${m}/config`).catch(() => null), api("/api/system").catch(() => null)]);
+  const [cfg, sys] = await Promise.all([api(`/api/${m}/config`).catch(() => null), sysInfo()]);
   const watch = cfg?.watchlist || (st?.symbols || []).map((x) => x.symbol);
   const traded = (st?.symbols || []).map((x) => x.symbol);
   const F = store.get(`kronos-lab-${m}`, null) || {};
@@ -1424,7 +1477,7 @@ PAGES.settings = async (view) => {
   const m = M;
   view.innerHTML = `<div class="head"><div><h1>${MKT[m]} settings</h1></div></div><div class="card"><div class="empty"><span class="spinner"></span></div></div>`;
   let saved, acct, sys;
-  try { [saved, acct, sys] = await Promise.all([api(`/api/${m}/config`), api("/api/account"), api("/api/system").catch(() => ({}))]); } catch (e) { view.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; return; }
+  try { [saved, acct, sys] = await Promise.all([api(`/api/${m}/config`), api("/api/account"), sysInfo()]); } catch (e) { view.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; return; }
   const d = structuredClone(saved);
   const presetOf = () => Object.keys(PRESETS[m]).find((k) => PRESETS[m][k][0] === d.strategy.min_expected_return_pct && PRESETS[m][k][1] === d.strategy.min_prob_up) || "custom";
   let presetKey = presetOf();
@@ -1647,7 +1700,12 @@ refreshStatus().then((s) => {
   if (s && !s.setup_ok) toast("Setup belum selesai: folder Kronos belum ada. Tutup panel lalu jalankan MULAI lagi.", "err", 12000);
   route();
 });
-setInterval(() => { if (!document.hidden) refreshStatus(); }, 8000);
+let statusBusy = false;
+setInterval(async () => {
+  if (document.hidden || statusBusy) return;
+  statusBusy = true;
+  try { await refreshStatus(); } finally { statusBusy = false; }
+}, 8000);
 const tickClock = () => { const el = $("#clock"); if (el) el.innerHTML = `<b>${hhmm(Date.now())}</b> <small>WIB</small>`; };
 tickClock(); setInterval(tickClock, 15000);
 
