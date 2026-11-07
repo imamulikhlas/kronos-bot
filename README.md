@@ -45,6 +45,20 @@ Tiap market punya robot sendiri: tombol Start/Stop, mode Simulation/Live, saldo 
 
 **Account** (pojok kanan atas) untuk API key Tokocrypto dan koneksi MetaTrader 5. Tombol bulan untuk tema terang/gelap.
 
+## Scanner: cari peluang di seluruh pasar
+
+Menu **Scanner** memeriksa seluruh pasar, bukan cuma watchlist:
+- **Crypto:** 30, 60, atau 100 koin USDT teramai (volume 24 jam). Stablecoin dan token leverage dilewati.
+- **Forex:** 28 pair mayor dan silang, plus emas (XAU) dan perak (XAG).
+
+Caranya dua tahap:
+1. Semua pair dinilai secara teknikal: tren, momentum dibanding volatilitas, kerapian gerak, breakout, lonjakan volume (crypto), RSI, dan apakah gerakannya cukup besar dibanding biaya. Untuk forex, arah Buy dan Sell dinilai terpisah.
+2. Kandidat teratas dicek AI Kronos. Hasilnya peluang skenario searah, perkiraan gerak harga, dan potensi untung setelah biaya.
+
+Hasilnya skor 0–100, tiga pilihan teratas, dan tabel lengkap. Dari situ kamu bisa langsung **+ Watch**, nyalakan **Auto**, buka **Chart**, atau **Backtest** pair itu. Ringkasan Top opportunities juga muncul di Overview.
+
+Skor hanya untuk mengurutkan, bukan jaminan untung. Sebelum pair diserahkan ke robot, jalankan Backtest dan pilih yang dapat nilai A atau B.
+
 ## Backtest lab: seberapa akurat, setelan mana yang terbaik
 
 Buka **Backtest** di market yang kamu pilih, centang beberapa pair sekaligus, lalu tekan **Run backtest**. Tiap hasil dapat nilai **A sampai D**:

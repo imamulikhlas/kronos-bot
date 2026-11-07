@@ -281,6 +281,7 @@ PAGES.overview = (view) => {
         <section class="card"><div class="card-head"><h2>Activity</h2></div><div class="feed" id="feed"></div></section>
       </div>
       <div class="stack">
+        <section class="card" id="oppCard"><div class="card-head"><h2>Top opportunities</h2><a class="link" href="#/${m}/scanner">Scanner</a></div><div class="rows" id="opps"><div class="faint small">…</div></div></section>
         <section class="card"><div class="card-head"><h2>Latest signals</h2><a class="link" href="#/${m}/markets">All markets</a></div><div class="rows" id="decisions"></div></section>
         <section class="card"><div class="card-head"><h2>How this bot trades</h2><a class="link" href="#/${m}/settings">Edit rules</a></div><dl class="rules" id="rules"></dl></section>
         <section class="card"><div class="card-head"><h2>Accuracy</h2><small>arah ramalan yang benar</small></div><div id="acc"></div></section>
@@ -395,6 +396,14 @@ PAGES.overview = (view) => {
       : `<div class="empty">Belum ada pair untuk auto trading.</div>`;
   };
   const load = async () => { try { renderOverview(await api(`/api/${m}/overview`)); } catch { /* koneksi sesaat */ } };
+  api(`/api/${m}/scanner`).then(({ result: r }) => {
+    if (!$("#opps")) return;
+    if (!r) { $("#opps").innerHTML = `<div class="empty" style="padding:8px">Scan seluruh pasar untuk menemukan pair yang sedang bergerak.<br><a class="btn sm accent" href="#/${m}/scanner">Scan market</a></div>`; return; }
+    const age = Math.round((Date.now() - r.time) / 60000);
+    $("#opps").innerHTML = r.rows.slice(0, 4).map((x) => `<div class="rowi"><a class="l" href="#/${m}/chart?${encodeURIComponent(x.symbol)}">${pair(x.label)} ${sideTag(x.side)}</a><b>${x.score}</b>
+      <div class="note">${x.ai ? `${p0(x.ai.prob)} skenario ${x.side === "short" ? "turun" : "naik"}, potensi ${pct(x.ai.net_pct)} setelah biaya` : "skor teknikal"}${x.in_watchlist ? "" : " · belum di watchlist"}</div></div>`).join("")
+      + `<p class="faint small" style="margin:10px 0 0">Scan ${age < 1 ? "baru saja" : age < 60 ? age + " menit lalu" : Math.round(age / 60) + " jam lalu"}, ${TF[r.tf]}.</p>`;
+  }).catch(() => {});
   every(4000, async () => { await refreshStatus(); renderAuto(); });
   every(7000, load);
   every(30000, async () => { try { renderAcc(await api(`/api/${m}/accuracy`)); } catch { /* abaikan */ } });
@@ -410,7 +419,7 @@ PAGES.markets = (view) => {
   let sel = store.get(`kronos-cmp-${m}`, null);
   let rows = [];
   view.innerHTML = `
-    <div class="head"><div><h1>${MKT[m]} markets</h1><p>Pantau beberapa pair sekaligus, lihat ramalan AI-nya, dan pilih pair mana yang di-trade robot (tombol <b>Auto</b>). Centang <b>Compare</b> untuk membandingkan performanya di bawah.</p></div></div>
+    <div class="head"><div><h1>${MKT[m]} markets</h1><p>Pantau beberapa pair sekaligus, lihat ramalan AI-nya, dan pilih pair mana yang di-trade robot (tombol <b>Auto</b>). Centang <b>Compare</b> untuk membandingkan performanya di bawah.</p></div><a class="btn accent" href="#/${m}/scanner">Find more pairs in Scanner</a></div>
     <div class="toolbar" style="margin-bottom:16px"><div id="addPick"></div><div id="tfSeg"></div><div class="grow"></div>
       <span class="faint small" id="scanInfo"></span>
       <button class="btn accent" id="scanBtn" data-busy="Forecasting…"><svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>Forecast all</button></div>
@@ -520,6 +529,132 @@ PAGES.markets = (view) => {
   loadWatch().then(() => { if (sel && sel.length >= 2) loadCompare(); });
   const t = setInterval(loadWatch, 45000); cur.timers.push(t);
 };
+
+/* ===================================================================== SCANNER: seluruh pasar */
+const TREND_TXT = { 1: "Up", "-1": "Down", 0: "Flat" };
+PAGES.scanner = async (view) => {
+  const m = M;
+  const fx = m === "forex";
+  const st0 = mstat() || (await refreshStatus())?.markets[m];
+  const P = store.get(`kronos-scan-${m}`, null) || { tf: st0?.timeframe || "1h", uni: fx ? "all" : "60", ai: 15, side: "all", hideWatch: false };
+  const save = () => store.set(`kronos-scan-${m}`, P);
+  let res = null, wasRunning = false;
+  view.innerHTML = `
+    <div class="head"><div><h1>Scanner</h1><p>Cari ${fx ? "pair forex dan logam" : "koin"} yang sedang bergerak dan punya peluang paling bagus di seluruh pasar, bukan cuma watchlist-mu. Kandidat teratas dicek AI, lalu bisa langsung kamu pantau atau serahkan ke robot.</p></div></div>
+    <section class="card scan-ctl">
+      <div class="field"><span class="label">Timeframe</span><div id="sTf"></div></div>
+      <div class="field"><span class="label">${fx ? "Pairs" : "Coins"}</span><div id="sUni"></div></div>
+      <div class="field"><span class="label">AI check</span><div id="sAi"></div></div>
+      <div class="grow"></div>
+      <button class="btn accent lg" id="sGo" data-busy="Starting…"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>Scan market</button>
+    </section>
+    <div id="sRun"></div>
+    <div id="sOut"></div>`;
+  seg($("#sTf"), TF, P.tf, (v) => { P.tf = v; save(); });
+  seg($("#sUni"), fx ? { majors: "Majors + gold", all: "All 30" } : { 30: "Top 30", 60: "Top 60", 100: "Top 100" }, String(P.uni), (v) => { P.uni = v; save(); });
+  seg($("#sAi"), { 0: "Off", 10: "Top 10", 15: "Top 15", 30: "Top 30" }, String(P.ai), (v) => { P.ai = Number(v); save(); });
+  $("#sGo").onclick = (e) => busy(e.currentTarget, async () => {
+    try { await api(`/api/${m}/scanner/start`, { tf: P.tf, universe: String(P.uni), ai_top: P.ai }); poll(); }
+    catch (err) { toast(err.message, "err", 7000); }
+  });
+
+  const act = (r) => r.in_watchlist
+    ? `<button class="auto-chip ${r.trading ? "on" : ""}" data-auto="${esc(r.symbol)}" title="${r.trading ? "Di-trade robot" : "Serahkan ke robot"}">Auto<span class="sw"></span></button>`
+    : `<button class="btn sm" data-watch="${esc(r.symbol)}">+ Watch</button>`;
+  const chance = (r) => {
+    if (!r.ai) return `<span class="faint">teknikal saja</span>`;
+    const dirW = r.side === "short" ? "turun" : "naik";
+    return `<b>${p0(r.ai.prob)}</b> skenario ${dirW}`;
+  };
+  const render = () => {
+    const out = $("#sOut"); if (!out) return;
+    if (!res) {
+      out.innerHTML = `<div class="card"><div class="empty"><b>Belum pernah scan</b>Tekan Scan market untuk memeriksa ${fx ? "30 pair forex dan logam" : "koin teramai di Tokocrypto"}. ${P.ai ? "Dengan AI check, butuh beberapa menit di CPU dan jauh lebih cepat dengan GPU." : ""}</div></div>`;
+      return;
+    }
+    let rows = res.rows.filter((r) => (P.side === "all" || r.side === P.side) && !(P.hideWatch && r.in_watchlist));
+    const picks = rows.filter((r) => !(r.flags || []).includes("Move too small after costs")).slice(0, 3);
+    const hrs = (h) => { const x = (h * TF_SEC[res.tf]) / 3600; return x >= 24 ? `${nf(x / 24, x % 24 ? 1 : 0)} hari` : `${nf(x, 0)} jam`; };
+    out.innerHTML = `
+      <div class="scan-meta">
+        <span>Scanned <b>${res.scanned}</b> ${fx ? "pairs" : "coins"} · <b>${res.ai_checked}</b> checked by AI · ${TF[res.tf]} · ${new Date(res.time).toLocaleString("id-ID", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} · ${nf(res.seconds, 0)} detik${res.device ? ` · ${esc(res.device)}` : ""}</span>
+        <span class="toolbar">${fx ? `<span id="sSide"></span>` : ""}<label class="check"><input type="checkbox" id="hideW" ${P.hideWatch ? "checked" : ""}><span class="box"></span><span class="t"><b>Hide my watchlist</b></span></label></span>
+      </div>
+      ${res.tf !== P.tf ? `<div class="notice warn" style="margin-bottom:14px">Hasil ini untuk timeframe ${TF[res.tf]}. Tekan Scan market untuk ${TF[P.tf]}.</div>` : ""}
+      <div class="picks">${picks.map((r, i) => `
+        <article class="pick ${i === 0 ? "first" : ""}">
+          <div class="row1"><span class="rank">#${i + 1}</span><span class="score">${r.score}<small>/100</small></span></div>
+          <a class="name" href="#/${m}/chart?${encodeURIComponent(r.symbol)}">${pair(r.label)}</a>
+          <div class="meta">${sideTag(r.side)} ${dir(r.ai?.direction || (r.side === "short" ? "TURUN" : "NAIK"))}</div>
+          ${spark(r.spark, (r.ret_1d || 0) >= 0)}
+          <p>${r.ai ? `AI: ${chance(r)} dalam ${hrs(r.ai.horizon)}, harga diperkirakan <b class="${tone(r.ai.exp_ret_pct)}">${pct(r.ai.exp_ret_pct)}</b>, potensi untung ${r.side === "short" ? "untuk Sell " : ""}<b class="${tone(r.ai.net_pct)}">${pct(r.ai.net_pct)}</b> setelah biaya.` : `Skor teknikal ${r.tech}/100. Aktifkan AI check untuk peluang skenario.`}
+            Gerak harian rata-rata ${nf(r.day_move_pct, 2)}%.${r.accuracy != null ? ` Akurasi AI di pair ini ${p0(r.accuracy)} dari ${r.acc_n}.` : " Akurasi AI di pair ini belum diuji."}</p>
+          <div class="chips">${(r.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join("")}${(r.flags || []).map((t) => `<span class="tag warn">${esc(t)}</span>`).join("")}</div>
+          <div class="foot">${act(r)}<span><a class="btn ghost sm" href="#/${m}/chart?${encodeURIComponent(r.symbol)}">Chart</a><a class="btn ghost sm" href="#/${m}/backtest" data-bt="${esc(r.symbol)}">Backtest</a></span></div>
+        </article>`).join("") || `<div class="empty">Tidak ada pair yang cocok dengan filter.</div>`}</div>
+      <section class="card">
+        <div class="card-head"><h2>All results</h2><small>${rows.length} ${fx ? "pairs" : "coins"}, diurutkan dari skor</small></div>
+        <div class="table-wrap"><table class="scan-t"><thead><tr><th>#</th><th>Pair</th><th>Score</th>${fx ? "<th>Side</th>" : ""}<th>AI chance</th><th class="r">AI forecast</th><th class="r">24h</th><th class="r">7d</th><th class="r">Daily move</th><th>Trend</th><th class="r">RSI</th>${fx ? "" : `<th class="r">Volume 24h</th>`}<th>Notes</th><th></th></tr></thead><tbody>
+        ${rows.map((r, i) => `<tr>
+          <td class="faint">${i + 1}</td>
+          <td><a href="#/${m}/chart?${encodeURIComponent(r.symbol)}" style="text-decoration:none">${pair(r.label)}</a>${r.in_watchlist ? ` <span class="tag">${r.trading ? "auto" : "watch"}</span>` : ""}</td>
+          <td><span class="scorebar"><i style="width:${r.score}%"></i></span> <b>${r.score}</b></td>
+          ${fx ? `<td>${sideTag(r.side)}</td>` : ""}
+          <td>${r.ai ? `${tug(r.ai.prob_up, r.ai.prob_down)}<span class="small">${chance(r)}</span>` : `<span class="faint small">–</span>`}</td>
+          <td class="r">${r.ai ? `<span class="${tone(r.ai.exp_ret_pct)}">${pct(r.ai.exp_ret_pct)}</span>` : "–"}</td>
+          <td class="r ${tone(r.ret_1d)}">${pct(r.ret_1d, 1)}</td><td class="r ${tone(r.ret_7d)}">${pct(r.ret_7d, 1)}</td>
+          <td class="r">${nf(r.day_move_pct, 2)}%</td><td>${TREND_TXT[r.trend]}</td><td class="r">${Math.round(r.rsi)}</td>
+          ${fx ? "" : `<td class="r">${r.quote_volume ? "$" + compact(r.quote_volume) : "–"}</td>`}
+          <td class="wrap" style="min-width:130px;font-size:12.5px">${[...(r.tags || []), ...(r.flags || [])].map(esc).join(", ")}</td>
+          <td class="r">${act(r)}</td></tr>`).join("")}
+        </tbody></table></div>
+      </section>
+      <details class="card how"><summary><b>Cara skor dihitung</b></summary>
+        <p>Tahap 1, semua pair: tren (EMA 50/200), momentum 7 hari dibanding volatilitasnya, seberapa rapi geraknya, breakout, ${fx ? "" : "lonjakan volume, "}RSI, dan apakah gerak wajarnya cukup besar dibanding biaya. ${fx ? "Arah Buy dan Sell dinilai terpisah." : "Crypto spot hanya dinilai untuk Buy."}</p>
+        <p>Tahap 2, kandidat teratas: AI Kronos membuat beberapa skenario harga. Skor akhir = 45% peluang skenario searah + 30% skor teknikal + 25% besar gerakan setelah biaya. Pair yang di backtest sering salah ditebak AI diturunkan skornya.</p>
+        <p>Skor hanya untuk mengurutkan, bukan jaminan untung. Sebelum menyerahkan pair ke robot, jalankan <a href="#/${m}/backtest">Backtest</a> dan pilih yang dapat nilai A atau B.</p></details>`;
+    if (fx) seg($("#sSide"), { all: "Buy & Sell", long: "Buy", short: "Sell" }, P.side, (v) => { P.side = v; save(); render(); });
+    $("#hideW").onchange = (e) => { P.hideWatch = e.target.checked; save(); render(); };
+    $$("[data-watch]").forEach((b) => b.onclick = async () => {
+      try { await api(`/api/${m}/watchlist`, { add: b.dataset.watch }); toast(`${labelOf(b.dataset.watch)} added to watchlist.`); res.rows.forEach((r) => { if (r.symbol === b.dataset.watch) r.in_watchlist = true; }); render(); }
+      catch (e) { toast(e.message, "err"); }
+    });
+    $$("[data-auto]").forEach((b) => b.onclick = async () => {
+      const sym = b.dataset.auto, on = !b.classList.contains("on");
+      if (on && !(await modal({ title: `Let the bot trade ${labelOf(sym)}?`, body: "<p>Robot akan membuka posisi di pair ini kalau sinyalnya memenuhi aturan masuk. Sebaiknya jalankan Backtest dulu.</p>", confirm: "Turn on Auto" }))) return;
+      try {
+        const r = await api(`/api/${m}/watchlist`, { trade: sym, on });
+        res.rows.forEach((x) => { x.trading = r.symbols.includes(x.symbol); });
+        toast(`${labelOf(sym)} ${on ? "added to" : "removed from"} auto trading${r.restarted ? ", bot restarted" : ""}.`); render(); refreshStatus();
+      } catch (e) { toast(e.message, "err"); }
+    });
+    $$("[data-bt]").forEach((a) => a.onclick = async (e) => {
+      e.preventDefault();
+      const k = `kronos-lab-${m}`, F = store.get(k, {}) || {};
+      F.syms = [a.dataset.bt]; store.set(k, F);
+      await api(`/api/${m}/watchlist`, { add: a.dataset.bt }).catch(() => {});
+      location.hash = `#/${m}/backtest`;
+    });
+  };
+  const poll = async () => {
+    let r; try { r = await api(`/api/${m}/scanner`); } catch { return; }
+    const s = r.status, el = $("#sRun"); if (!el) return;
+    if ($("#sGo")) $("#sGo").disabled = s.running;
+    if (s.running) {
+      const p = s.total ? Math.round((s.done / s.total) * 100) : null;
+      el.innerHTML = `<div class="runbox"><div class="top"><span class="pct">${p == null ? "…" : p + "%"}</span><span class="soft small">${esc(s.phase)} ${s.total ? `${s.done}/${s.total}` : ""}</span></div>
+        <div class="progress ${p == null ? "indet" : ""}"><i style="width:${p ?? 30}%"></i></div></div>`;
+      wasRunning = true;
+    } else {
+      el.innerHTML = s.error ? `<div class="notice err" style="margin-bottom:16px"><b>Scan gagal:</b> ${esc(s.error)}</div>` : "";
+      if (wasRunning || !res) { if (wasRunning && !s.error) toast("Scan finished."); wasRunning = false; res = r.result; render(); }
+    }
+  };
+  every(1500, poll);
+};
+function compact(v) {
+  return v >= 1e9 ? nf(v / 1e9, 1) + "B" : v >= 1e6 ? nf(v / 1e6, 1) + "M" : v >= 1e3 ? nf(v / 1e3, 0) + "K" : nf(v, 0);
+}
 
 /* ===================================================================== CHART: analisa satu pair */
 PAGES.chart = async (view, query) => {

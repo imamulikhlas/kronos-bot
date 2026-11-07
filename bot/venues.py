@@ -40,6 +40,31 @@ class CryptoData:
     def price(self, symbol):
         return float(retry(self.ex.fetch_ticker, symbol)["last"])
 
+    def tickers(self):
+        """Ringkasan 24 jam semua pair: {symbol: {last, change_pct, quote_volume}}.
+        Kalau Tokocrypto tidak menyediakannya sekaligus, pakai data publik Binance (koin yang sama),
+        lalu disaring ke pair yang ada di Tokocrypto."""
+        def norm(raw):
+            out = {}
+            for sym, t in raw.items():
+                last = t.get("last") or t.get("close")
+                qv = t.get("quoteVolume")
+                if qv is None and t.get("baseVolume") and last:
+                    qv = t["baseVolume"] * last
+                out[sym] = {"last": last, "change_pct": t.get("percentage"), "quote_volume": qv or 0}
+            return out
+        try:
+            if self.ex.has.get("fetchTickers"):
+                res = norm(retry(self.ex.fetch_tickers))
+                if res:
+                    return res
+        except Exception:  # noqa: BLE001
+            pass
+        import ccxt
+        mk = retry(self.ex.load_markets)
+        bn = ccxt.binance({"enableRateLimit": True})
+        return {k: v for k, v in norm(retry(bn.fetch_tickers)).items() if k in mk}
+
     def future_ts(self, last_ts, tf, n):
         return future_timestamps(last_ts, self.tf_ms(tf), n)
 

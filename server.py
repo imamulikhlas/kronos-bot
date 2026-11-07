@@ -655,8 +655,17 @@ _fc_lock = threading.Lock()
 _forecaster = {"obj": None, "key": None}
 
 
-def run_forecast(symbol, tf) -> Signal:
+def get_forecaster(m):
+    """Model AI bersama untuk panel (panggil di dalam _fc_lock)."""
     from bot.forecast import KronosForecaster
+    key = (m["name"], m["tokenizer"], m["n_paths"], m.get("device", "auto"))
+    if _forecaster["key"] != key:
+        _forecaster["obj"] = KronosForecaster({**m, "device": m.get("device", "auto")})
+        _forecaster["key"] = key
+    return _forecaster["obj"]
+
+
+def run_forecast(symbol, tf) -> Signal:
     venue = venue_of(symbol)
     c = vcfg(venue)
     m = c["model"]
@@ -666,12 +675,8 @@ def run_forecast(symbol, tf) -> Signal:
     if len(hist) < 100:
         raise RuntimeError(f"data hanya {len(hist)} candle")
     y = data.future_ts(hist["timestamps"].iloc[-1], tf, int(m["pred_len"]))
-    key = (m["name"], m["tokenizer"], m["n_paths"], m.get("device", "auto"))
     with _fc_lock:
-        if _forecaster["key"] != key:
-            _forecaster["obj"] = KronosForecaster({**m, "device": m.get("device", "auto")})
-            _forecaster["key"] = key
-        paths = _forecaster["obj"].paths(hist, y)
+        paths = get_forecaster(m).paths(hist, y)
     sig = build_signal(symbol, hist, paths, s["fee_pct"], int(s["trend_period"]))
     acc = acc_for(venue, symbol, tf, sig.horizon)
     sig.accuracy, sig.acc_n = acc["hit"], acc["n"]
@@ -727,6 +732,130 @@ def scan_status(jid: str):
     if not job:
         fail("Proses tidak ditemukan.", 404)
     return job
+
+
+# ===================================================================== scanner seluruh pasar
+_scanner = {v: {"running": False, "phase": "", "done": 0, "total": 0} for v in VENUES}
+
+
+def scan_file(venue):
+    return path_in_root(f"data/scan_{venue}.json")
+
+
+@app.post("/api/{venue}/scanner/start")
+def scanner_start(venue: str, tf: str = Body("1h", embed=True), universe: str = Body("60", embed=True),
+                  ai_top: int = Body(15, embed=True)):
+    from bot import scanner as sc
+    check_venue(venue)
+    if tf not in TFS:
+        fail("Timeframe tidak dikenal.")
+    st = _scanner[venue]
+    if st["running"]:
+        fail("Scan masih berjalan.")
+    ai_top = max(0, min(40, int(ai_top)))
+    if ai_top and not (KRONOS_DIR / "model").exists():
+        fail("Setup belum selesai: folder Kronos belum ada. Matikan AI check atau jalankan MULAI lagi.")
+    st.update(running=True, phase="Mengambil daftar pair", done=0, total=0, error="")
+
+    def work():
+        t0 = time.time()
+        try:
+            c = vcfg(venue)
+            vc = full_cfg()[venue]
+            m, s = c["model"], strat(c, venue)
+            fee = float(s["fee_pct"])
+            data = markets().data(venue)
+            if venue == "crypto":
+                top = int(universe) if str(universe).isdigit() else 60
+                uni = sc.crypto_universe(data, c.get("quote", "USDT"), top=top)
+            else:
+                uni = sc.forex_universe(data, "majors" if universe == "majors" else "all")
+            if not uni:
+                raise RuntimeError("Daftar pair kosong. Cek koneksi internet.")
+            need = max(260, int(m["lookback"]))
+            st.update(phase="Membaca grafik semua pair", total=len(uni))
+
+            def load(u):
+                try:
+                    df = data.recent(u["symbol"], tf, need)
+                    return u, df, sc.technical(df, tf, fee, venue, int(m["pred_len"]))
+                except Exception as e:  # noqa: BLE001
+                    return u, None, {"error": str(e)}
+                finally:
+                    st["done"] += 1
+
+            loaded = list(POOL.map(load, uni))
+            rows = []
+            hists = {}
+            for u, df, t in loaded:
+                if not t or "error" in t:
+                    continue
+                rows.append({"symbol": u["symbol"], "label": display(u["symbol"]), "quote_volume": u.get("quote_volume"),
+                             "tech_detail": t, "side": t["side"]})
+                hists[u["symbol"]] = df
+            rows.sort(key=lambda r: r["tech_detail"]["tech"], reverse=True)
+            device = None
+            if ai_top and rows:
+                from bot.forecast import default_batch
+                pick = [r for r in rows[:ai_top] if len(hists[r["symbol"]]) >= int(m["lookback"])]
+                st.update(phase="AI meramal kandidat teratas", done=0, total=len(pick))
+                items = []
+                for r in pick:
+                    hist = hists[r["symbol"]].tail(int(m["lookback"])).reset_index(drop=True)
+                    items.append((r, hist, data.future_ts(hist["timestamps"].iloc[-1], tf, int(m["pred_len"]))))
+                with _fc_lock:
+                    fc = get_forecaster(m)
+                    device = getattr(fc, "device_name", None)
+                    bs = default_batch(getattr(fc, "device", "cpu"))
+                    for i in range(0, len(items), bs):
+                        chunk = items[i:i + bs]
+                        for (r, hist, _), paths in zip(chunk, fc.paths_many([(h, y) for _, h, y in chunk])):
+                            sig = build_signal(r["symbol"], hist, paths, fee, int(s["trend_period"]))
+                            acc = acc_for(venue, r["symbol"], tf, sig.horizon)
+                            sig.accuracy, sig.acc_n = acc["hit"], acc["n"]
+                            _forecasts[(r["symbol"], tf)] = (sig, time.time())
+                            sc.combine(r, sig, fee, acc, venue)
+                        st["done"] += len(chunk)
+            for r in rows:
+                if "score" not in r:
+                    sc.combine(r, None, fee, None, venue)
+                t = r.pop("tech_detail")
+                r.update({k: t[k] for k in ("price", "ret_1d", "ret_7d", "atr_pct", "day_move_pct", "trend", "rsi",
+                                            "er", "vol_ratio", "cost_ratio", "tags", "spark")})
+                r["tech"] = round(t["tech"] * 100)
+                r["in_watchlist"] = r["symbol"] in vc["watchlist"]
+                r["trading"] = r["symbol"] in vc["symbols"]
+            rows.sort(key=lambda r: r["score"], reverse=True)
+            res = {"venue": venue, "tf": tf, "time": int(time.time() * 1000), "seconds": round(time.time() - t0, 1),
+                   "scanned": len(uni), "rated": len(rows), "ai_checked": sum(1 for r in rows if r.get("ai")),
+                   "device": device, "rows": rows, "universe": universe}
+            f = scan_file(venue)
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(json.dumps(res, default=float))
+        except Exception as e:  # noqa: BLE001
+            st["error"] = str(e)
+        finally:
+            st.update(running=False, phase="")
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"ok": True}
+
+
+@app.get("/api/{venue}/scanner")
+def scanner_get(venue: str):
+    check_venue(venue)
+    f = scan_file(venue)
+    res = None
+    if f.exists():
+        try:
+            res = json.loads(f.read_text())
+            c = full_cfg()[venue]
+            for r in res["rows"]:
+                r["in_watchlist"] = r["symbol"] in c["watchlist"]
+                r["trading"] = r["symbol"] in c["symbols"]
+        except Exception:  # noqa: BLE001
+            res = None
+    return {"status": _scanner[venue], "result": res}
 
 
 # ===================================================================== accuracy & history
