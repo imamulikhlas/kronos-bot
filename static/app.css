@@ -120,6 +120,7 @@ main { position: relative; z-index: 1; max-width: 1320px; margin: 0 auto; paddin
 .btn.lg { padding: 14px 28px; font: 700 17px/1 var(--display); letter-spacing: -.01em; }
 .spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }
+body.savebar-on .dock { bottom: 92px; }
 
 /* ---------------- label ---------------- */
 .tag { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--card-2); color: var(--ink-2); border: 1px solid var(--line); white-space: nowrap; }
@@ -492,6 +493,51 @@ details.how { margin-top: 16px; } details.how summary { cursor: pointer; } detai
 .tabs button.on { color: var(--ink); border-bottom-color: var(--acc); }
 .gpu-note { display: flex; gap: 10px; align-items: flex-start; }
 
+/* ---------------- activity dock (melayang) ---------------- */
+.dock { position: fixed; right: 18px; bottom: 18px; z-index: 45; display: grid; justify-items: end; gap: 10px; pointer-events: none; }
+.dock > * { pointer-events: auto; }
+.dock-pill { display: inline-flex; align-items: center; gap: 9px; padding: 8px 14px 8px 10px; border-radius: 999px; background: var(--card); color: var(--ink); border: var(--edge); box-shadow: 3px 3px 0 var(--ink); font: 650 13.5px/1 var(--text); cursor: pointer; }
+.dock-pill .dot { width: 18px; height: 18px; border-radius: 50%; background: var(--line-2); display: grid; place-items: center; position: relative; }
+.dock-pill.busy .dot { background: var(--acc); } .dock-pill.high .dot { background: var(--down); }
+.dock-pill .spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid transparent; border-top-color: var(--ink); animation: spin .9s linear infinite; }
+.dock-pill .ram { font-weight: 500; color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.dock-pill.high { box-shadow: 3px 3px 0 var(--down); }
+.dock-panel { width: min(380px, calc(100vw - 32px)); max-height: min(72vh, 640px); overflow: auto; padding: 16px; border-radius: 18px; background: var(--card); border: var(--edge); box-shadow: 5px 5px 0 var(--ink); display: grid; gap: 12px; }
+.dock-panel.anim { animation: pop .14s ease-out; }
+.dock-head { display: flex; justify-content: space-between; align-items: center; }
+.dock-head h3 { margin: 0; font: 800 22px/1 var(--display); letter-spacing: -.04em; }
+.icon-btn.sm { width: 30px; height: 30px; font-size: 13px; }
+.meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 10px; }
+.meter .mrow { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--ink-2); } .meter .mrow b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.mbar { height: 8px; border-radius: 99px; background: var(--card-2); border: 1px solid var(--line-2); overflow: hidden; margin-top: 4px; }
+.mbar i { display: block; height: 100%; background: var(--up); transition: width .4s; }
+.meter.warn .mbar i { background: var(--warn); } .meter.err .mbar i { background: var(--down); }
+.meter small { font-size: 11px; color: var(--ink-3); }
+.dock-list { display: grid; gap: 8px; }
+.ditem { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--card-2); }
+.ditem .ic { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--acc); color: var(--acc-ink); border: 1.5px solid var(--ink); }
+.ditem .ic svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; }
+.ditem.bad .ic { background: var(--down); color: #fff; } .ditem.done .ic { background: var(--up); color: #fff; }
+.ditem .ttl { font-weight: 650; font-size: 14px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.ditem .ph { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; overflow-wrap: anywhere; }
+.ditem.bad .ph { color: var(--down); }
+.ditem .progress.thin { height: 6px; margin-top: 7px; border-width: 1px; }
+.ditem .acts { display: grid; gap: 4px; justify-items: end; }
+.btn.xs { padding: 4px 9px; font-size: 12px; } .danger-t { color: var(--down); }
+.dock-more summary { cursor: pointer; font-size: 12.5px; color: var(--ink-2); }
+.dock-more ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; font-size: 12.5px; }
+.dock-more li { display: flex; justify-content: space-between; }
+.dock-tip { margin: 0; }
+@keyframes spin { to { transform: rotate(360deg); } }
+body.savebar-on .dock { bottom: 92px; }
+@media (max-width: 860px) {
+  .dock { right: 10px; bottom: calc(84px + env(safe-area-inset-bottom)); }
+  .dock-pill .ram { display: none; }
+  #toasts { bottom: 146px; }
+  .dock-panel { max-height: calc(100vh - 220px); }
+}
+@media (prefers-reduced-motion: reduce) { .dock-pill .spin { animation: none; } }
+
 /* ---------------- modal & toast ---------------- */
 .modal { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 16px; background: color-mix(in srgb, var(--ink) 40%, transparent); backdrop-filter: blur(4px); }
 .modal-box { width: min(460px, 100%); padding: 24px; border-radius: 20px; background: var(--card); border: var(--edge); box-shadow: 6px 6px 0 var(--acc); animation: pop .16s ease-out; }
@@ -538,7 +584,7 @@ details.how { margin-top: 16px; } details.how summary { cursor: pointer; } detai
   .versus { grid-template-columns: 1fr 1fr; } .versus div:nth-child(3) { border-left: 0; padding-left: 0; } .versus div:nth-child(n+3) { border-top: 1px solid var(--line); }
   .levels { grid-template-columns: 1fr 1fr; } .levels > div:nth-child(2) { grid-column: 1 / -1; order: 3; }
   .savebar { bottom: 92px; border-radius: 20px; }
-  #toasts { bottom: 96px; }
+  #toasts { bottom: 146px; }
   .verdict-word { font-size: 46px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

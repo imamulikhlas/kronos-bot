@@ -8,6 +8,7 @@ Endpoint per market berbentuk /api/{venue}/... dengan venue = crypto | forex.
 """
 import json
 import os
+import sys
 import socket
 import sqlite3
 import threading
@@ -310,6 +311,7 @@ def bot_start(venue: str):
         fail("Mode live belum dikonfirmasi. Buka Settings.")
     if not (KRONOS_DIR / "model").exists():
         fail("Setup belum selesai: folder Kronos belum ada. Jalankan MULAI lagi.")
+    guard_resources()
     ctl.start_bot(venue)
     return {"ok": True}
 
@@ -683,7 +685,7 @@ def get_forecaster(m):
     return _forecaster["obj"]
 
 
-def run_forecast(symbol, tf) -> Signal:
+def run_forecast(symbol, tf, job: dict | None = None) -> Signal:
     venue = venue_of(symbol)
     c = vcfg(venue)
     m = c["model"]
@@ -693,7 +695,9 @@ def run_forecast(symbol, tf) -> Signal:
     if len(hist) < 100:
         raise RuntimeError(f"data hanya {len(hist)} candle")
     y = data.future_ts(hist["timestamps"].iloc[-1], tf, int(m["pred_len"]))
-    with _fc_lock:
+    with ai_slot(job):
+        if job:
+            job["phase"] = "AI meramal"
         paths = get_forecaster(m).paths(hist, y)
     sig = build_signal(symbol, hist, paths, s["fee_pct"], int(s["trend_period"]))
     acc = acc_for(venue, symbol, tf, sig.horizon)
@@ -712,15 +716,85 @@ def get_signal(symbol: str, tf: str):
 def forecast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True)):
     if not (KRONOS_DIR / "model").exists():
         fail("Setup belum selesai: folder Kronos belum ada.")
+    job = new_job("forecast", f"Forecast {display(symbol)} {tf.upper()}", venue_of(symbol), symbol=symbol)
     try:
-        sig = run_forecast(symbol, tf)
+        sig = run_forecast(symbol, tf, job)
     except Exception as e:  # noqa: BLE001
+        end_job(job, str(e))
         fail(f"Gagal meramal {display(symbol)}: {e}", 502)
+    end_job(job)
     _forecasts[(symbol, tf)] = (sig, time.time())
     return {"signal": sig_dict(sig, vcfg(venue_of(symbol)), "manual forecast", tf)}
 
 
 _jobs: dict = {}
+_ai_queue = {"waiting": 0}
+
+
+class Cancelled(Exception):
+    pass
+
+
+def memory_pct() -> float:
+    try:
+        import psutil
+        return float(psutil.virtual_memory().percent)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def guard_resources():
+    """Tolak pekerjaan berat baru kalau memori hampir penuh, supaya komputer tidak hang."""
+    pct = memory_pct()
+    if pct >= 93:
+        fail(f"Memori komputer hampir penuh ({pct:.0f}%). Tunggu proses yang berjalan selesai, batalkan sebagian "
+             "lewat panel Activity, atau tutup aplikasi lain dulu.", 503)
+
+
+def new_job(kind: str, label: str, venue: str | None = None, total: int = 0, heavy: bool = True, **extra) -> dict:
+    if heavy:
+        guard_resources()
+    now = time.time()
+    for k in [k for k, j in _jobs.items() if j.get("finished") and now - j.get("ended", now) > 3600]:
+        _jobs.pop(k, None)
+    jid = uuid.uuid4().hex[:8]
+    job = {"id": jid, "kind": kind, "label": label, "venue": venue, "done": 0, "total": total, "current": "",
+           "phase": "", "finished": False, "error": "", "result": None, "started": now, "cancel": False,
+           "waiting": False, **extra}
+    _jobs[jid] = job
+    return job
+
+
+def end_job(job: dict, error: str = ""):
+    job.update(finished=True, ended=time.time(), waiting=False)
+    if error and not job.get("error"):
+        job["error"] = error
+
+
+def check_cancel(job: dict | None):
+    if job and job.get("cancel"):
+        raise Cancelled()
+
+
+class ai_slot:
+    """Antrean model AI panel: satu ramalan sekaligus, sisanya menunggu (terlihat di panel Activity)."""
+
+    def __init__(self, job: dict | None = None):
+        self.job = job
+
+    def __enter__(self):
+        if self.job:
+            self.job["waiting"] = True
+        _ai_queue["waiting"] += 1
+        _fc_lock.acquire()
+        _ai_queue["waiting"] -= 1
+        if self.job:
+            self.job["waiting"] = False
+        return self
+
+    def __exit__(self, *exc):
+        _fc_lock.release()
+        return False
 
 
 @app.post("/api/forecast_at")
@@ -764,8 +838,13 @@ def forecast_at(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=T
             sig = None
     if sig is None:
         y = data.future_ts(hist["timestamps"].iloc[-1], tf, h)
-        with _fc_lock:
-            paths = get_forecaster(m).paths(hist, y)
+        job = new_job("timetravel", f"Time travel {display(symbol)}", venue, symbol=symbol)
+        try:
+            with ai_slot(job):
+                job["phase"] = "AI meramal"
+                paths = get_forecaster(m).paths(hist, y)
+        finally:
+            end_job(job)
         sig = build_signal(symbol, hist, paths, s["fee_pct"], int(s["trend_period"]))
         if len(hist) == lb:
             try:
@@ -797,9 +876,8 @@ def hindcast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True
     if tf not in TFS:
         fail("Timeframe tidak dikenal.")
     count = max(3, min(40, int(count)))
-    jid = uuid.uuid4().hex[:8]
-    job = {"id": jid, "done": 0, "total": count, "finished": False, "error": "", "result": None}
-    _jobs[jid] = job
+    job = new_job("hindcast", f"Past forecasts {display(symbol)} {tf.upper()}", venue_of(symbol), count, symbol=symbol)
+    jid = job["id"]
 
     def work():
         import backtest as bt
@@ -835,10 +913,12 @@ def hindcast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True
                 else:
                     todo.append(t)
             if todo:
-                with _fc_lock:
+                with ai_slot(job):
+                    job["phase"] = "AI meramal ulang"
                     fc = get_forecaster(m)
                     bs = default_batch(getattr(fc, "device", "cpu"))
                     for i in range(0, len(todo), bs):
+                        check_cancel(job)
                         chunk = todo[i:i + bs]
                         items = []
                         for t in chunk:
@@ -880,10 +960,12 @@ def hindcast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True
                                          "in_band": float(np.mean([p["in_band"] for p in done_pts])) if done_pts else None,
                                          "strong_n": sum(1 for p in rated if p["direction"] != "SAMPING"),
                                          "strong_hits": sum(1 for p in rated if p["direction"] != "SAMPING" and p["hit"])}}
+        except Cancelled:
+            job["error"] = "Dibatalkan."
         except Exception as e:  # noqa: BLE001
             job["error"] = str(e)
         finally:
-            job["finished"] = True
+            end_job(job)
 
     threading.Thread(target=work, daemon=True).start()
     return {"job": jid}
@@ -891,20 +973,25 @@ def hindcast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True
 
 @app.post("/api/scan")
 def scan(symbols: list = Body(..., embed=True), tf: str = Body(..., embed=True)):
-    jid = uuid.uuid4().hex[:8]
-    job = {"id": jid, "done": 0, "total": len(symbols), "current": "", "finished": False, "symbols": list(symbols)}
-    _jobs[jid] = job
+    venue = venue_of(symbols[0]) if symbols else None
+    job = new_job("forecast_all", f"Forecast {len(symbols)} pairs", venue, len(symbols), symbols=list(symbols))
+    jid = job["id"]
 
     def work():
-        for sym in symbols:
-            job["current"] = display(sym)
-            try:
-                _forecasts[(sym, tf)] = (run_forecast(sym, tf), time.time())
-            except Exception as e:  # noqa: BLE001
-                job.setdefault("errors", {})[sym] = str(e)
-            job["done"] += 1
-        job["finished"] = True
-        job["current"] = ""
+        try:
+            for sym in symbols:
+                check_cancel(job)
+                job["current"] = display(sym)
+                try:
+                    _forecasts[(sym, tf)] = (run_forecast(sym, tf, job), time.time())
+                except Exception as e:  # noqa: BLE001
+                    job.setdefault("errors", {})[sym] = str(e)
+                job["done"] += 1
+        except Cancelled:
+            job["error"] = "Dibatalkan."
+        finally:
+            job["current"] = ""
+            end_job(job)
 
     threading.Thread(target=work, daemon=True).start()
     return {"job": jid}
@@ -916,6 +1003,127 @@ def scan_status(jid: str):
     if not job:
         fail("Proses tidak ditemukan.", 404)
     return job
+
+
+# ===================================================================== aktivitas (panel melayang)
+def _pid(path):
+    try:
+        return int(path.read_text().strip())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@app.get("/api/activity")
+def activity():
+    """Semua proses yang sedang jalan + pemakaian CPU/RAM/GPU + peringatan beban."""
+    import psutil
+    now = time.time()
+    items = []
+    c = full_cfg()
+    pids = {"Panel": os.getpid()}
+    for v in VENUES:
+        if ctl.bot_running(v):
+            stv = store(v)
+            state = stv.vget("bot_state") or "berjalan"
+            phase = {"memuat model": "Memuat model AI", "meramal": "Meramal pasar", "menunggu": "Menunggu candle berikutnya",
+                     "berjalan": "Menunggu candle berikutnya"}.get(state, state)
+            nr = stv.vget("next_run")
+            items.append({"id": f"bot:{v}", "kind": "bot", "venue": v, "label": f"Auto trading {v.capitalize()}",
+                          "phase": phase, "busy": state in ("memuat model", "meramal"),
+                          "mode": c[v].get("mode", "paper"), "next_run": int(nr) if nr else None,
+                          "link": f"#/{v}/overview", "cancel": "stop"})
+            pid = _pid(ctl.bot_pid(v))
+            if pid:
+                pids[f"Robot {v}"] = pid
+        elif ctl.bot_crashed(v):
+            items.append({"id": f"bot:{v}", "kind": "bot", "venue": v, "label": f"Auto trading {v.capitalize()}",
+                          "phase": "Berhenti karena error", "error": True, "link": f"#/{v}/overview"})
+    if ctl.backtest_running():
+        bs = bt_status()
+        items.append({"id": "backtest", "kind": "backtest", "label": "Backtest", "phase": bs.get("phase") or "",
+                      "pct": bs.get("pct"), "device": bs.get("device"), "busy": True, "cancel": "cancel",
+                      "started": ctl.BT_PID.stat().st_mtime if ctl.BT_PID.exists() else None, "link": "backtest"})
+        pid = _pid(ctl.BT_PID)
+        if pid:
+            pids["Backtest"] = pid
+    for j in list(_jobs.values()):
+        if j.get("finished") and now - j.get("ended", now) > 8:
+            continue
+        pct = (j["done"] / j["total"] * 100) if j.get("total") else None
+        phase = "Menunggu giliran AI" if j.get("waiting") else (j.get("phase") or j.get("current") or "")
+        if j.get("current") and j.get("phase") and not j.get("waiting"):
+            phase = f"{j['phase']} · {j['current']}"
+        link = None
+        if j.get("venue"):
+            page = {"scanner": "scanner", "hindcast": "chart", "timetravel": "chart", "forecast": "chart",
+                    "forecast_all": "markets"}.get(j["kind"], "overview")
+            link = f"#/{j['venue']}/{page}" + (f"?{j['symbol']}" if j.get("symbol") and page == "chart" else "")
+        items.append({"id": j["id"], "kind": j["kind"], "venue": j.get("venue"), "label": j["label"], "phase": phase,
+                      "pct": pct, "done": j.get("done"), "total": j.get("total"), "started": j.get("started"),
+                      "finished": j.get("finished"), "error": j.get("error") or None, "waiting": j.get("waiting"),
+                      "busy": not j.get("finished"), "cancel": None if j.get("finished") or j["kind"] in ("forecast", "timetravel") else "cancel",
+                      "link": link})
+    # sumber daya
+    vm = psutil.virtual_memory()
+    procs = []
+    for name, pid in pids.items():
+        try:
+            p = psutil.Process(pid)
+            mem = p.memory_info().rss + sum(ch.memory_info().rss for ch in p.children(recursive=True) if ch.is_running())
+            procs.append({"name": name, "mem_gb": round(mem / 1024 ** 3, 2)})
+        except Exception:  # noqa: BLE001
+            continue
+    res = {"cpu": psutil.cpu_percent(interval=None), "ram_pct": vm.percent,
+           "ram_used_gb": round((vm.total - vm.available) / 1024 ** 3, 1), "ram_total_gb": round(vm.total / 1024 ** 3, 1),
+           "procs": procs, "gpu": None}
+    if "torch" in sys.modules:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                free, total = torch.cuda.mem_get_info()
+                res["gpu"] = {"name": torch.cuda.get_device_name(0), "pct": round((1 - free / total) * 100),
+                              "used_gb": round((total - free) / 1024 ** 3, 1), "total_gb": round(total / 1024 ** 3, 1)}
+        except Exception:  # noqa: BLE001
+            pass
+    models = (1 if _forecaster.get("obj") is not None else 0) + sum(1 for i in items if i["kind"] == "bot" and not i.get("error")) \
+        + (1 if any(i["kind"] == "backtest" for i in items) else 0)
+    warnings = []
+    if vm.percent >= 93:
+        warnings.append({"level": "err", "text": f"Memori hampir penuh ({vm.percent:.0f}%). Pekerjaan berat baru ditahan sampai ada yang selesai."})
+    elif vm.percent >= 85:
+        warnings.append({"level": "warn", "text": f"Memori {vm.percent:.0f}% terpakai. Hindari menjalankan pekerjaan berat lain bersamaan."})
+    if res["cpu"] >= 95 and sum(1 for i in items if i.get("busy")) >= 2:
+        warnings.append({"level": "warn", "text": "CPU penuh. Proses berjalan bergantian, jadi masing-masing lebih lambat."})
+    if models >= 3 and res["ram_total_gb"] < 12:
+        warnings.append({"level": "warn", "text": f"{models} salinan model AI dimuat (panel, robot, backtest). Dengan RAM {res['ram_total_gb']:.0f} GB, "
+                                                  "sebaiknya jalankan backtest saat robot tidak berjalan."})
+    if _ai_queue["waiting"] > 0:
+        res["queue"] = _ai_queue["waiting"]
+    active = sum(1 for i in items if i.get("busy") or (i["kind"] == "bot" and not i.get("error")))
+    return {"items": items, "resources": res, "models": models, "warnings": warnings, "active": active,
+            "load": "high" if any(w["level"] == "err" for w in warnings) or vm.percent >= 85 or res["cpu"] >= 90 else
+                    "busy" if any(i.get("busy") for i in items) else "idle"}
+
+
+@app.post("/api/activity/cancel")
+def activity_cancel(id: str = Body(..., embed=True)):
+    if id == "backtest":
+        ctl.stop_backtest()
+        return {"ok": True}
+    if id.startswith("bot:"):
+        v = id.split(":", 1)[1]
+        check_venue(v)
+        ctl.stop_bot(v)
+        store(v).vset("bot_state", "berhenti")
+        return {"ok": True}
+    j = _jobs.get(id)
+    if not j:
+        fail("Proses tidak ditemukan.", 404)
+    j["cancel"] = True
+    for v in VENUES:
+        if _scanner[v].get("job") == id:
+            _scanner[v]["cancel"] = True
+    return {"ok": True}
 
 
 # ===================================================================== scanner seluruh pasar
@@ -939,7 +1147,14 @@ def scanner_start(venue: str, tf: str = Body("1h", embed=True), universe: str = 
     ai_top = max(0, min(40, int(ai_top)))
     if ai_top and not (KRONOS_DIR / "model").exists():
         fail("Setup belum selesai: folder Kronos belum ada. Matikan AI check atau jalankan MULAI lagi.")
-    st.update(running=True, phase="Mengambil daftar pair", done=0, total=0, error="")
+    job = new_job("scanner", f"Scanner {venue.capitalize()}", venue)
+    st.update(running=True, phase="Mengambil daftar pair", done=0, total=0, error="", job=job["id"], cancel=False)
+
+    def sync():
+        job.update(phase=st["phase"], done=st["done"], total=st["total"])
+        if st.get("cancel") or job.get("cancel"):
+            job["cancel"] = st["cancel"] = True
+            raise Cancelled()
 
     def work():
         t0 = time.time()
@@ -958,6 +1173,7 @@ def scanner_start(venue: str, tf: str = Body("1h", embed=True), universe: str = 
                 raise RuntimeError("Daftar pair kosong. Cek koneksi internet.")
             need = max(260, int(m["lookback"]))
             st.update(phase="Membaca grafik semua pair", total=len(uni))
+            sync()
 
             def load(u):
                 try:
@@ -967,8 +1183,10 @@ def scanner_start(venue: str, tf: str = Body("1h", embed=True), universe: str = 
                     return u, None, {"error": str(e)}
                 finally:
                     st["done"] += 1
+                    job.update(done=st["done"])
 
             loaded = list(POOL.map(load, uni))
+            sync()
             rows = []
             hists = {}
             for u, df, t in loaded:
@@ -987,11 +1205,13 @@ def scanner_start(venue: str, tf: str = Body("1h", embed=True), universe: str = 
                 for r in pick:
                     hist = hists[r["symbol"]].tail(int(m["lookback"])).reset_index(drop=True)
                     items.append((r, hist, data.future_ts(hist["timestamps"].iloc[-1], tf, int(m["pred_len"]))))
-                with _fc_lock:
+                sync()
+                with ai_slot(job):
                     fc = get_forecaster(m)
                     device = getattr(fc, "device_name", None)
                     bs = default_batch(getattr(fc, "device", "cpu"))
                     for i in range(0, len(items), bs):
+                        sync()
                         chunk = items[i:i + bs]
                         for (r, hist, _), paths in zip(chunk, fc.paths_many([(h, y) for _, h, y in chunk])):
                             sig = build_signal(r["symbol"], hist, paths, fee, int(s["trend_period"]))
@@ -1000,6 +1220,7 @@ def scanner_start(venue: str, tf: str = Body("1h", embed=True), universe: str = 
                             _forecasts[(r["symbol"], tf)] = (sig, time.time())
                             sc.combine(r, sig, fee, acc, venue)
                         st["done"] += len(chunk)
+                        job.update(done=st["done"])
             for r in rows:
                 if "score" not in r:
                     sc.combine(r, None, fee, None, venue)
@@ -1016,10 +1237,13 @@ def scanner_start(venue: str, tf: str = Body("1h", embed=True), universe: str = 
             f = scan_file(venue)
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_text(json.dumps(res, default=float))
+        except Cancelled:
+            st["error"] = "Scan dibatalkan."
         except Exception as e:  # noqa: BLE001
             st["error"] = str(e)
         finally:
             st.update(running=False, phase="")
+            end_job(job, st.get("error", ""))
 
     threading.Thread(target=work, daemon=True).start()
     return {"ok": True}
@@ -1121,9 +1345,8 @@ def benchmark():
     """Ukur kecepatan ramalan di CPU dan di GPU yang terpasang, dengan model AI dari setelan."""
     if not (KRONOS_DIR / "model").exists():
         fail("Setup belum selesai: folder Kronos belum ada.")
-    jid = uuid.uuid4().hex[:8]
-    job = {"id": jid, "done": 0, "total": 0, "finished": False, "error": "", "result": None, "current": ""}
-    _jobs[jid] = job
+    job = new_job("benchmark", "GPU speed test")
+    jid = job["id"]
 
     def work():
         from bot.forecast import KronosForecaster, default_batch, gpu_candidates
@@ -1139,7 +1362,11 @@ def benchmark():
             devs = ["cpu"] + [str(d) for d in gpu_candidates()]
             job["total"] = len(devs)
             rows = []
+            slot = ai_slot(job)
+            slot.__enter__()
+            job["release"] = slot
             for d in devs:
+                check_cancel(job)
                 job["current"] = d
                 try:
                     t0 = time.time()
@@ -1163,10 +1390,15 @@ def benchmark():
             best = min((r for r in rows if r.get("ok") and r.get("sec_per_point")), key=lambda r: r["sec_per_point"], default=None)
             job["result"] = {"rows": rows, "best": best and best["kind"],
                              "model": m["name"], "n_paths": m["n_paths"]}
+        except Cancelled:
+            job["error"] = "Dibatalkan."
         except Exception as e:  # noqa: BLE001
             job["error"] = str(e)
         finally:
-            job["finished"] = True
+            slot = job.pop("release", None)
+            if slot:
+                slot.__exit__(None, None, None)
+            end_job(job)
 
     threading.Thread(target=work, daemon=True).start()
     return {"job": jid}
@@ -1185,6 +1417,7 @@ def bt_start(symbols: list = Body(None, embed=True), symbol: str = Body("", embe
     syms = [x for x in (symbols or [symbol]) if x]
     if not syms:
         fail("Pilih minimal satu pair.")
+    guard_resources()
     if len({venue_of(x) for x in syms}) > 1:
         fail("Pair crypto dan forex diuji terpisah.")
     if tf not in TFS:

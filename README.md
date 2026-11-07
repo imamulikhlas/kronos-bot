@@ -59,6 +59,20 @@ Hasilnya skor 0–100, tiga pilihan teratas, dan tabel lengkap. Dari situ kamu b
 
 Skor hanya untuk mengurutkan, bukan jaminan untung. Sebelum pair diserahkan ke robot, jalankan Backtest dan pilih yang dapat nilai A atau B.
 
+## Panel Activity (pojok kanan bawah)
+
+Tombol kecil di pojok kanan bawah selalu menunjukkan berapa proses yang sedang berjalan dan pemakaian RAM. Klik tombol itu untuk membuka panel **Activity**:
+- pemakaian CPU, RAM, dan GPU (NVIDIA);
+- semua proses yang berjalan: robot Crypto/Forex, backtest, scanner, Past forecasts, ramalan, dan tes GPU, lengkap dengan progres dan lama berjalan;
+- tombol **Open** ke halamannya, serta **Cancel** atau **Stop**;
+- peringatan kalau beban terlalu berat, dan memori yang dipakai tiap proses.
+
+Supaya komputer tidak hang:
+- Ramalan dari panel diantre, jadi tidak berebut. Yang sedang menunggu tampil sebagai "Menunggu giliran AI".
+- Kalau memori sudah sekitar 93%, pekerjaan berat baru (backtest, scanner, robot, dan lainnya) ditahan dulu.
+- Sebelum memulai pekerjaan berat saat komputer sedang sibuk, panel bertanya dulu.
+- Saat tab panel tidak sedang dilihat, panel berhenti memperbarui data supaya browser ringan.
+
 ## Backtest lab: seberapa akurat, setelan mana yang terbaik
 
 Buka **Backtest** di market yang kamu pilih, centang beberapa pair sekaligus, lalu tekan **Run backtest**. Tiap hasil dapat nilai **A sampai D**:

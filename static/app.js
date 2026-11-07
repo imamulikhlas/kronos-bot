@@ -128,8 +128,10 @@ const PALETTE = () => [cssv("--acc-text"), "#E07A2E", "#1F9E89", "#C2477B", "#6B
 const S = { status: null, pairs: {} };
 let M = store.get("kronos-market", null) || null;
 let cur = { timers: [], charts: [] };
-function every(ms, fn) { fn(); const id = setInterval(fn, ms); cur.timers.push(id); return id; }
+/* polling berhenti saat tab tidak terlihat, supaya browser & komputer tidak terbebani */
+function every(ms, fn) { fn(); const id = setInterval(() => { if (!document.hidden) fn(); }, ms); cur.timers.push(id); return id; }
 function teardown() {
+  document.body.classList.remove("savebar-on");
   cur.timers.forEach(clearInterval);
   cur.charts.forEach((c) => { try { c.remove(); } catch { /* sudah dihapus */ } });
   cur = { timers: [], charts: [] };
@@ -329,6 +331,7 @@ PAGES.overview = (view) => {
         <label class="check"><input type="checkbox" id="pause" ${st.paused ? "checked" : ""}><span class="box"></span><span class="t"><b>Pause new entries</b><span>posisi yang ada tetap dijaga</span></span></label>
       </div>`;
     $("#startBtn")?.addEventListener("click", (e) => busy(e.currentTarget, async () => {
+      if (!(await heavyGuard("auto trading"))) return;
       if (live && !(await modal({ title: `Start ${MKT[m]} in Live mode?`, body: "<p>Robot akan membuka dan menutup posisi memakai <b>uang sungguhan</b>.</p>", confirm: "Start", danger: true }))) return;
       try { await api(`/api/${m}/bot/start`, {}); toast(`${MKT[m]} auto trading started.`); } catch (err) { toast(err.message, "err"); }
       await refreshStatus(); renderAuto();
@@ -516,6 +519,7 @@ PAGES.markets = (view) => {
     ch.timeScale().fitContent();
   };
   $("#scanBtn").onclick = (e) => busy(e.currentTarget, async () => {
+    if (!(await heavyGuard("forecast"))) return;
     try {
       const { job } = await api("/api/scan", { symbols: rows.map((r) => r.symbol), tf });
       await new Promise((resolve) => {
@@ -559,6 +563,7 @@ PAGES.scanner = async (view) => {
   seg($("#sUni"), fx ? { majors: "Majors + gold", all: "All 30" } : { 30: "Top 30", 60: "Top 60", 100: "Top 100" }, String(P.uni), (v) => { P.uni = v; save(); });
   seg($("#sAi"), { 0: "Off", 10: "Top 10", 15: "Top 15", 30: "Top 30" }, String(P.ai), (v) => { P.ai = Number(v); save(); });
   $("#sGo").onclick = (e) => busy(e.currentTarget, async () => {
+    if (!(await heavyGuard("scan"))) return;
     try { await api(`/api/${m}/scanner/start`, { tf: P.tf, universe: String(P.uni), ai_top: P.ai }); poll(); }
     catch (err) { toast(err.message, "err", 7000); }
   });
@@ -1047,6 +1052,7 @@ PAGES.backtest = async (view) => {
       <button class="btn dark lg" id="btGo" data-busy="Starting…" ${F.syms.length ? "" : "disabled"}>Run backtest</button>
       ${!usesGpu ? `<p class="faint small" style="margin:0">Punya kartu grafis (NVIDIA, AMD, Intel Arc, atau Mac M-series)? Pilih GPU supaya jauh lebih cepat.</p>` : ""}`;
     $("#btGo").onclick = (e) => busy(e.currentTarget, async () => {
+      if (!(await heavyGuard("backtest"))) return;
       try {
         await api("/api/backtest/start", { symbols: F.syms, tf: F.tf, candles: F.candles, speed: F.every, optimize: F.opt, device: F.device, end: endStr() });
         toast("Backtest started."); poll();
@@ -1248,6 +1254,7 @@ function renderGpuBox(el, sys, onPick) {
   };
   $("#gpuBench", el).onclick = (e) => busy(e.currentTarget, async () => {
     const out = $("#gpuBenchOut", el);
+    if (!(await heavyGuard("speed test"))) return;
     try {
       const { job } = await api("/api/system/benchmark", {});
       out.innerHTML = `<p class="soft small"><span class="spinner"></span> Memuat model dan meramal di tiap perangkat…</p>`;
@@ -1385,6 +1392,7 @@ PAGES.settings = async (view) => {
       : `Contoh Buy di 100: ditutup di <b class="down">${nf(100 * (1 - s.stop_loss_pct / 100), 2)}</b> (rugi) atau <b class="up">${nf(100 * (1 + s.take_profit_pct / 100), 2)}</b> (untung).`)
       + ` Posisi ditutup paksa setelah ${s.max_hold_candles} candle (±${hrs >= 48 ? nf(hrs / 24, 1) + " hari" : nf(hrs, 0) + " jam"}).`;
     $("#savebar").hidden = JSON.stringify(d) === JSON.stringify(saved);
+    document.body.classList.toggle("savebar-on", !$("#savebar").hidden);
   };
   view.addEventListener("input", (e) => {
     const el = e.target.closest("[data-path]"); if (!el) return;
@@ -1497,6 +1505,114 @@ refreshStatus().then((s) => {
   if (s && !s.setup_ok) toast("Setup belum selesai: folder Kronos belum ada. Tutup panel lalu jalankan MULAI lagi.", "err", 12000);
   route();
 });
-setInterval(refreshStatus, 8000);
+setInterval(() => { if (!document.hidden) refreshStatus(); }, 8000);
 const tickClock = () => { const el = $("#clock"); if (el) el.innerHTML = `<b>${hhmm(Date.now())}</b> <small>WIB</small>`; };
 tickClock(); setInterval(tickClock, 15000);
+
+/* ===================================================================== ACTIVITY: panel melayang */
+const DOCK = { open: store.get("kronos-dock-open", false), data: null, seen: {}, timer: null };
+const KIND_ICON = {
+  bot: '<path d="M8 5.5v13l10-6.5z"/>',
+  backtest: '<path d="M12 7.5V12l3 2"/><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6M3 4v4h4"/>',
+  scanner: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4"/><path d="M12 12 18 6"/>',
+  hindcast: '<path d="M4 18.5 9 13l3.5 3L20 7.5"/><path d="M4 5v4h4"/>',
+  timetravel: '<path d="M12 7.5V12l3 2"/><circle cx="12" cy="12" r="8.5"/>',
+  forecast: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
+  forecast_all: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
+  benchmark: '<path d="M4 16a8 8 0 1 1 16 0"/><path d="M12 16l4-5"/>',
+};
+function ago(sec) {
+  if (!sec) return "";
+  const d = Math.max(0, Date.now() / 1000 - sec);
+  return d < 60 ? `${Math.round(d)} dtk` : d < 3600 ? `${Math.floor(d / 60)} mnt` : `${Math.floor(d / 3600)} j ${Math.floor((d % 3600) / 60)} mnt`;
+}
+function meter(label, pctv, sub) {
+  const cls = pctv >= 90 ? "err" : pctv >= 80 ? "warn" : "";
+  return `<div class="meter ${cls}"><div class="mrow"><span>${label}</span><b>${pctv == null ? "–" : Math.round(pctv) + "%"}</b></div>
+    <div class="mbar"><i style="width:${Math.min(100, pctv || 0)}%"></i></div>${sub ? `<small>${sub}</small>` : ""}</div>`;
+}
+function renderDock() {
+  const el = $("#dock"); if (!el) return;
+  const d = DOCK.data;
+  const load = d?.load || "idle";
+  const n = d?.active || 0;
+  const r = d?.resources;
+  const pill = `<button class="dock-pill ${load}" id="dockBtn" aria-expanded="${DOCK.open}" aria-controls="dockPanel" title="Proses yang sedang berjalan">
+      <span class="dot">${load === "busy" || (d && d.items.some((i) => i.busy)) ? `<span class="spin"></span>` : ""}</span>
+      <span class="t">${!d ? "Activity" : n ? `${n} running` : "Idle"}</span>
+      ${r ? `<span class="ram">RAM ${Math.round(r.ram_pct)}%</span>` : ""}</button>`;
+  let panel = "";
+  if (DOCK.open) {
+    const items = d?.items || [];
+    panel = `<section class="dock-panel ${DOCK.anim ? "anim" : ""}" id="dockPanel" role="dialog" aria-label="Activity">
+      <div class="dock-head"><h3>Activity</h3><button class="icon-btn sm" id="dockClose" aria-label="Tutup">✕</button></div>
+      ${r ? `<div class="meters">${meter("CPU", r.cpu)}${meter("RAM", r.ram_pct, `${nf(r.ram_used_gb, 1)} / ${nf(r.ram_total_gb, 0)} GB`)}${r.gpu ? meter("GPU", r.gpu.pct, `${nf(r.gpu.used_gb, 1)} / ${nf(r.gpu.total_gb, 0)} GB`) : ""}</div>` : `<p class="faint small">Tidak tersambung ke server.</p>`}
+      ${(d?.warnings || []).map((w) => `<div class="notice ${w.level === "err" ? "err" : "warn"}">${esc(w.text)}</div>`).join("")}
+      <div class="dock-list">${items.length ? items.map((i) => `
+        <div class="ditem ${i.error ? "bad" : ""} ${i.finished && !i.error ? "done" : ""}">
+          <span class="ic"><svg viewBox="0 0 24 24">${KIND_ICON[i.kind] || KIND_ICON.forecast}</svg></span>
+          <div class="body">
+            <div class="ttl">${esc(i.label)}${i.venue ? ` <span class="tag">${esc(MKT[i.venue] || i.venue)}</span>` : ""}${i.mode === "live" ? ` <span class="tag live">Live</span>` : ""}</div>
+            <div class="ph">${i.finished ? (i.error ? esc(i.error) : "Selesai") : esc(i.phase || "")}${i.next_run && !i.busy ? ` · berikutnya ${hhmm(i.next_run)} WIB` : ""}${i.started && !i.finished ? ` · ${ago(i.started)}` : ""}</div>
+            ${i.busy && !i.finished ? `<div class="progress ${i.pct == null ? "indet" : ""} thin"><i style="width:${i.pct ?? 30}%"></i></div>` : ""}
+          </div>
+          <div class="acts">${i.link ? `<a class="btn ghost xs" href="${i.link === "backtest" ? `#/${M || "crypto"}/backtest` : i.link}" data-close>Open</a>` : ""}${i.cancel ? `<button class="btn ghost xs danger-t" data-cancel="${esc(i.id)}" data-label="${esc(i.label)}" data-kind="${i.cancel}">${i.cancel === "stop" ? "Stop" : "Cancel"}</button>` : ""}</div>
+        </div>`).join("") : `<div class="empty" style="padding:14px 8px"><b>Tidak ada proses yang berjalan</b>Robot, backtest, scanner, dan ramalan akan muncul di sini.</div>`}</div>
+      ${r?.procs?.length ? `<details class="dock-more" ${DOCK.more ? "open" : ""}><summary>Memori per proses${d.models ? ` · ${d.models} model AI dimuat` : ""}</summary><ul>${r.procs.map((p) => `<li><span>${esc(p.name)}</span><b>${nf(p.mem_gb, 2)} GB</b></li>`).join("")}</ul></details>` : ""}
+      <p class="faint small dock-tip">Tiap robot dan backtest memuat model AI sendiri. Kalau komputer terasa berat, jalankan satu pekerjaan besar dalam satu waktu. Ramalan dari panel diantre otomatis.</p>
+    </section>`;
+  }
+  const prevScroll = $("#dockPanel")?.scrollTop || 0;
+  el.innerHTML = panel + pill;
+  DOCK.anim = false;
+  if ($("#dockPanel")) $("#dockPanel").scrollTop = prevScroll;
+  $(".dock-more", el)?.addEventListener("toggle", (e) => { DOCK.more = e.target.open; });
+  $("#dockBtn").onclick = () => { DOCK.open = !DOCK.open; DOCK.anim = DOCK.open; store.set("kronos-dock-open", DOCK.open); renderDock(); if (DOCK.open) pollActivity(); };
+  $("#dockClose")?.addEventListener("click", () => { DOCK.open = false; store.set("kronos-dock-open", false); renderDock(); });
+  $$("[data-close]", el).forEach((a) => a.addEventListener("click", () => { if (matchMedia("(max-width: 860px)").matches) { DOCK.open = false; renderDock(); } }));
+  $$("[data-cancel]", el).forEach((b) => b.onclick = async () => {
+    const stop = b.dataset.kind === "stop";
+    const ok = await modal({ title: `${stop ? "Stop" : "Cancel"} ${b.dataset.label}?`, danger: true, confirm: stop ? "Stop" : "Cancel it", cancel: "Keep running",
+      body: stop ? "<p>Robot berhenti. Posisi yang masih terbuka <b>tidak ikut ditutup</b> dan tidak dijaga robot.</p>" : "<p>Proses dihentikan. Hasil yang sudah selesai tetap tersimpan.</p>" });
+    if (!ok) return;
+    try { await api("/api/activity/cancel", { id: b.dataset.cancel }); toast(stop ? "Robot dihentikan." : "Dibatalkan."); pollActivity(); refreshStatus(); }
+    catch (e) { toast(e.message, "err"); }
+  });
+}
+async function pollActivity() {
+  if (document.hidden) return;
+  try { DOCK.data = await api("/api/activity"); } catch { DOCK.data = null; }
+  // kabari kalau pekerjaan latar belakang selesai
+  for (const i of DOCK.data?.items || []) {
+    if (i.kind === "bot") continue;
+    if (!i.finished) DOCK.seen[i.id] = true;
+    else if (DOCK.seen[i.id]) {
+      delete DOCK.seen[i.id];
+      if (!["forecast", "timetravel"].includes(i.kind)) toast(i.error ? `${i.label}: ${i.error}` : `${i.label} selesai.`, i.error ? "err" : "ok", 5000);
+    }
+  }
+  if (DOCK.data && DOCK.seen.backtest && !DOCK.data.items.some((i) => i.id === "backtest")) {
+    delete DOCK.seen.backtest;
+    if (!location.hash.includes("/backtest")) toast("Backtest selesai. Buka Backtest untuk melihat hasilnya.", "ok", 6000);
+  }
+  if (DOCK.data?.items.some((i) => i.id === "backtest")) DOCK.seen.backtest = true;
+  renderDock();
+}
+(function loopActivity() {
+  const busy = DOCK.data?.items?.some((i) => i.busy);
+  const ms = DOCK.open || busy ? 2500 : 7000;
+  DOCK.timer = setTimeout(async () => { await pollActivity(); loopActivity(); }, ms);
+})();
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { pollActivity(); refreshStatus(); } });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && DOCK.open && $("#modal").hidden) { DOCK.open = false; store.set("kronos-dock-open", false); renderDock(); } });
+pollActivity();
+
+/* sebelum memulai pekerjaan berat: tanya dulu kalau komputer sedang sibuk */
+async function heavyGuard(what) {
+  try { DOCK.data = await api("/api/activity"); renderDock(); } catch { return true; }
+  const r = DOCK.data.resources, busy = DOCK.data.items.filter((i) => i.busy && i.kind !== "bot");
+  if (r.ram_pct < 85 && busy.length < 2) return true;
+  return !!(await modal({ title: "Komputer sedang sibuk", confirm: `Run ${what} anyway`, cancel: "Not now",
+    body: `<p>RAM ${Math.round(r.ram_pct)}% terpakai${busy.length ? `, dan ${busy.length} pekerjaan lain masih berjalan (${busy.map((b) => esc(b.label)).join(", ")})` : ""}. Menambah pekerjaan berat bisa membuat komputer lambat.</p><p class="soft small">Lihat semuanya di panel Activity di pojok kanan bawah.</p>` }));
+}
+
