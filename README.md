@@ -116,6 +116,12 @@ Di **Chart**, pilih **Past forecasts** (6, 12, atau 24). AI meramal ulang bebera
 
 Ringkasan **AI track record** menunjukkan berapa yang benar, rata-rata meleset harga akhir dibanding menebak "diam", dan seberapa sering harga berakhir di dalam rentang ramalan.
 
+### Time travel: lihat ramalan AI di titik mana pun di masa lalu
+
+Di **Chart**, tekan **Time travel** lalu klik candle mana pun, atau isi tanggal dan jam lalu tekan **Show AI view**. AI meramal seolah-olah saat itu adalah sekarang, hanya dengan data sampai candle itu.
+
+Ramalannya digambar di grafik, lalu di kanan terlihat apa yang benar-benar terjadi sesudahnya: arahnya benar atau salah, berapa meleset, dan apakah harga tetap di dalam rentang ramalan. Pakai **Earlier / Later** untuk bergeser, dan **Back to now** untuk kembali ke grafik sekarang. Hasilnya disimpan di cache, jadi membuka titik yang sama lagi langsung tampil.
+
 ### Ramalan ensemble
 
 **Settings → AI model & compute → Ensemble forecast** (aktif secara default) membagi skenario ke tiga panjang riwayat yang berbeda. Hasilnya, ramalan tidak bergantung pada satu jendela data. Perkiraan tengah juga dihitung dengan rata-rata terpangkas, supaya satu-dua skenario ekstrem tidak menyeret hasil.

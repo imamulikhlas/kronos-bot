@@ -634,7 +634,11 @@ def candles(symbol: str, tf: str, limit: int = 300):
         fail("Timeframe tidak dikenal.")
     data = data_for(symbol)
     try:
-        df = candles_df(symbol, tf, min(limit, 1000), ttl=8)
+        if limit > 1000:      # jauh ke belakang (time travel): ambil bertahap, simpan lebih lama
+            df = cached(("ohlcv-long", symbol, tf, int(limit)), 120,
+                        lambda: data_for(symbol).history(symbol, tf, min(int(limit), 5000)))
+        else:
+            df = candles_df(symbol, tf, limit, ttl=8)
     except Exception as e:  # noqa: BLE001
         fail(f"Data harga {display(symbol)} tidak bisa diambil: {e}", 502)
     if df.empty:
@@ -708,6 +712,72 @@ def forecast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True
 _jobs: dict = {}
 
 
+@app.post("/api/forecast_at")
+def forecast_at(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True), time_s: int = Body(..., embed=True)):
+    """'Time travel': ramalan AI seandainya dibuat saat candle `time_s` tutup (hanya data sampai candle itu),
+    dibanding harga yang benar-benar terjadi sesudahnya."""
+    import backtest as bt
+    if not (KRONOS_DIR / "model").exists():
+        fail("Setup belum selesai: folder Kronos belum ada.")
+    if tf not in TFS:
+        fail("Timeframe tidak dikenal.")
+    venue = venue_of(symbol)
+    c = vcfg(venue)
+    m, s = c["model"], strat(c, venue)
+    lb, h = int(m["lookback"]), int(m["pred_len"])
+    data = data_for(symbol)
+    back = max(0, int((time.time() + 7 * 3600 - int(time_s)) // TF_SEC[tf]))
+    if venue == "forex":
+        back = int(back * 0.75) + 10                     # akhir pekan tidak ada candle
+    n = min(20000, lb + back + h + 20)
+    try:
+        df = data.history(symbol, tf, n)
+    except Exception as e:  # noqa: BLE001
+        fail(f"Gagal mengambil data: {e}", 502)
+    times = np.array([wib_epoch(t) for t in df["timestamps"]])
+    idx = int(np.searchsorted(times, int(time_s), side="right")) - 1
+    if idx < 0 or idx >= len(df):
+        fail("Candle itu tidak ada di data.")
+    if idx + 1 < min(lb, 100):
+        fail("Terlalu jauh ke belakang: data sebelum candle itu tidak cukup untuk AI.")
+    hist = df.iloc[max(0, idx + 1 - lb):idx + 1].reset_index(drop=True)
+    cfile = bt.cache_path(symbol, tf, c, s, False)
+    key = str(int(hist["ts"].iloc[-1]))
+    sig = None
+    if len(hist) == lb and cfile.exists():
+        try:
+            raw = json.loads(cfile.read_text()).get(key)
+            if raw:
+                sig = Signal(**{a: b for a, b in raw.items() if a in Signal.__dataclass_fields__})
+        except Exception:  # noqa: BLE001
+            sig = None
+    if sig is None:
+        y = data.future_ts(hist["timestamps"].iloc[-1], tf, h)
+        with _fc_lock:
+            paths = get_forecaster(m).paths(hist, y)
+        sig = build_signal(symbol, hist, paths, s["fee_pct"], int(s["trend_period"]))
+        if len(hist) == lb:
+            try:
+                cache = json.loads(cfile.read_text()) if cfile.exists() else {}
+                cache[key] = sig.__dict__
+                cfile.parent.mkdir(parents=True, exist_ok=True)
+                cfile.write_text(json.dumps(cache))
+            except Exception:  # noqa: BLE001
+                pass
+    after = df.iloc[idx + 1:idx + 1 + h]
+    actual = [{"time": wib_epoch(t), "value": float(v)} for t, v in zip(after["timestamps"], after["close"])]
+    out = {"signal": sig_dict(sig, c, "time travel"), "as_of": wib_epoch(hist["timestamps"].iloc[-1]),
+           "actual": actual, "complete": len(actual) == h, "short_history": len(hist) < lb}
+    if actual:
+        last = actual[-1]["value"]
+        k = len(actual)
+        ret = (last / sig.last_close - 1) * 100
+        out.update(actual_ret_pct=ret, hit=bool(np.sign(ret) == np.sign(sig.exp_ret_pct)) if ret else None,
+                   err_pct=abs(sig.path[k - 1] / last - 1) * 100,
+                   in_band=bool(sig.path_lo and sig.path_lo[k - 1] <= last <= sig.path_hi[k - 1]))
+    return out
+
+
 @app.post("/api/hindcast")
 def hindcast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True), count: int = Body(12, embed=True)):
     """Ramalan AI di masa lalu (hanya memakai data sebelum titik itu) dibanding harga yang benar-benar terjadi."""
@@ -732,9 +802,12 @@ def hindcast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True
             df = data.history(symbol, tf, lb + (count + 2) * h + 5)
             n = len(df)
             # titik ramalan di grid tetap (tiap h candle) supaya hasil lama bisa dipakai ulang dari cache
-            grid = h * TF_SEC[tf] * 1000
+            # titik ramalan di grid tetap (nomor candle kelipatan h) supaya hasil lama bisa dipakai ulang dari cache
+            tfms = TF_SEC[tf] * 1000
             tsv = df["ts"].to_numpy("int64")
-            origins = [t for t in range(lb, n + 1) if tsv[t - 1] % grid == 0][-count:]
+            origins = [t for t in range(lb, n + 1) if (tsv[t - 1] // tfms) % h == 0][-count:]
+            if len(origins) < max(3, count // 2):          # data berlubang / jam tidak rata: hitung mundur per h candle
+                origins = [n - k * h for k in range(count, 0, -1) if n - k * h >= lb]
             if not origins:
                 raise RuntimeError(f"data hanya {n} candle")
             job["total"] = len(origins)

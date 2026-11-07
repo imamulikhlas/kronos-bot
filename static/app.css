@@ -358,6 +358,15 @@ tr.mark-row td { background: var(--card-2); }
 .results small { color: var(--ink-3); grid-column: 1 / -1; }
 pre.log { margin: 10px 0 0; padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; font-size: 12.5px; white-space: pre-wrap; max-height: 240px; overflow: auto; color: var(--ink-2); }
 
+/* ---------------- time travel ---------------- */
+.ttbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: -4px 0 16px; padding: 10px 12px; border-radius: 14px; border: 1px dashed var(--line-2); }
+.ttbar .grow { flex: 1; }
+.ttbar .input { width: auto; max-width: 220px; padding: 7px 10px; }
+.tt-or { color: var(--ink-3); font-size: 13px; }
+#ttPick.on { background: var(--acc); color: var(--acc-ink); border: var(--edge); box-shadow: 3px 3px 0 var(--ink); }
+#ttNav { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.chart.picking { cursor: crosshair; outline: 2px dashed var(--acc-text); outline-offset: 4px; border-radius: 8px; }
+
 /* ---------------- GPU status ---------------- */
 .gpubox { display: grid; gap: 10px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--line); background: var(--card-2); font-size: 14px; }
 .gpu-row { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 10px; }

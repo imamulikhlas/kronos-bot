@@ -671,6 +671,12 @@ PAGES.chart = async (view, query) => {
     <div class="toolbar" style="margin-bottom:16px"><div id="symPick"></div><div id="tfPick"></div><div class="grow"></div>
       <span class="hist-ctl"><span class="small soft">Past forecasts</span><span id="histSeg"></span></span>
       <button class="btn accent" id="fcBtn" data-busy="Forecasting…"><svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>Run forecast</button></div>
+    <div class="ttbar" id="ttBar">
+      <button class="btn" id="ttPick" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M12 7.5V12l3 2"/><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6M3 4v4h4"/></svg>Time travel</button>
+      <span class="tt-or">atau pilih waktu</span><input type="datetime-local" class="input" id="ttAt" aria-label="Waktu di masa lalu">
+      <button class="btn sm" id="ttGo">Show AI view</button>
+      <span class="grow"></span><span id="ttNav"></span>
+    </div>
     <div class="grid split">
       <section class="card">
         <div class="price-line"><span id="phSym" style="font-size:18px"></span><span class="px" id="phPx">–</span><span id="phChg"></span><span class="faint small" id="phTime" style="margin-left:auto"></span></div>
@@ -703,11 +709,12 @@ PAGES.chart = async (view, query) => {
     const rs = rsiC.addLineSeries({ color: cssv("--ink-2"), lineWidth: 1.5, priceLineVisible: false });
     [70, 30].forEach((v) => rs.createPriceLine({ price: v, color: hexA(v === 70 ? down : up, 0.55), lineStyle: 2, lineWidth: 1, axisLabelVisible: false }));
     main.timeScale().subscribeVisibleLogicalRangeChange((r) => { if (r) rsiC.timeScale().setVisibleLogicalRange(r); });
+    main.subscribeClick((param) => { if (A.ttPick && param && param.time) runTT(Number(param.time)); });
     return { main, vol, hi, lo, candles, e50, e200, fc, rs };
   };
   let C = mkCharts();
   const drawForecast = () => {
-    const s = A.signal;
+    const s = A.tt ? A.tt.signal : A.signal;
     if (!s || !s.path?.length) { [C.hi, C.lo, C.fc].forEach((x) => x.setData([])); return; }
     const t = (i) => s.t0 + step * i;
     const line = (arr) => [{ time: t(0), value: s.last_close }, ...arr.map((v, i) => ({ time: t(i + 1), value: v }))];
@@ -721,7 +728,8 @@ PAGES.chart = async (view, query) => {
     const up = cssv("--up"), down = cssv("--down"), acc = cssv("--acc-text");
     const fade = h && A.histN ? 0.3 : 1;
     C.candles.applyOptions({ upColor: hexA(up, fade), downColor: hexA(down, fade), wickUpColor: hexA(up, fade), wickDownColor: hexA(down, fade) });
-    if (!h || !A.histN) { C.candles.setMarkers([]); return; }
+    const ttMark = A.tt ? [{ time: A.tt.as_of, position: "aboveBar", color: cssv("--ink"), shape: "square", text: "AI view" }] : [];
+    if (!h || !A.histN) { C.candles.setMarkers(ttMark); return; }
     const marks = [];
     h.points.forEach((p) => {
       const col = !p.complete ? acc : p.hit ? up : down;
@@ -730,7 +738,7 @@ PAGES.chart = async (view, query) => {
       A.histSeries.push(ser);
       if (p.complete) marks.push({ time: p.t0, position: p.exp_ret_pct >= 0 ? "belowBar" : "aboveBar", color: col, shape: p.exp_ret_pct >= 0 ? "arrowUp" : "arrowDown", text: p.hit ? "✓" : "✕" });
     });
-    C.candles.setMarkers(marks.sort((a, b) => a.time - b.time));
+    C.candles.setMarkers([...marks.filter((x) => !A.tt || x.time !== A.tt.as_of), ...ttMark].sort((a, b) => a.time - b.time));
   };
   const renderHist = (state) => {
     const el = $("#hist"); if (!el) return;
@@ -776,7 +784,7 @@ PAGES.chart = async (view, query) => {
   };
   const loadCandles = async () => {
     try {
-      const d = await api(`/api/candles?symbol=${encodeURIComponent(A.sym)}&tf=${A.tf}&limit=${A.histN > 12 ? 500 : 300}`);
+      const d = await api(`/api/candles?symbol=${encodeURIComponent(A.sym)}&tf=${A.tf}&limit=${A.limit || (A.histN > 12 ? 500 : 300)}`);
       if (!$("#phPx")) return;
       step = d.step;
       C.candles.setData(d.candles);
@@ -792,7 +800,62 @@ PAGES.chart = async (view, query) => {
       $("#phTime").textContent = `${src} · ${new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
     } catch (e) { if ($("#phTime")) $("#phTime").innerHTML = `<span class="down">${esc(e.message)}</span>`; }
   };
+  /* ---- time travel: ramalan AI seandainya dibuat di candle lampau ---- */
+  const fmtT = (sec) => new Date(sec * 1000).toLocaleString("id-ID", { timeZone: "UTC", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const setPick = (on) => {
+    A.ttPick = on;
+    const b = $("#ttPick"); if (!b) return;
+    b.classList.toggle("on", on); b.setAttribute("aria-pressed", on);
+    $("#mainChart").classList.toggle("picking", on);
+    if (on) toast("Klik candle di grafik untuk melihat ramalan AI saat itu.", "ok", 5000);
+  };
+  const runTT = async (t) => {
+    setPick(false);
+    const el = $("#verdict");
+    if (el) el.innerHTML = `<div class="card-head"><h2>AI view</h2></div><div class="soft"><span class="spinner"></span> AI meramal seolah-olah sekarang ${esc(fmtT(t))}, hanya memakai data sampai candle itu…</div>`;
+    try {
+      const r = await api("/api/forecast_at", { symbol: A.sym, tf: A.tf, time_s: Math.round(t) });
+      if (!$("#verdict")) return;
+      A.tt = r;
+      const need = Math.ceil((Date.now() / 1000 + 7 * 3600 - r.as_of) / step) + 80;
+      if (need > (A.limit || 300)) { A.limit = Math.min(5000, need); await loadCandles(); }
+      drawForecast(); drawHistory(); renderTT();
+      C.main.timeScale().setVisibleRange({ from: r.as_of - 90 * step, to: r.as_of + (r.signal.path.length + 25) * step });
+    } catch (e) {
+      toast(e.message, "err", 7000);
+      renderVerdict();
+    }
+  };
+  const ttStep = (dir) => { if (A.tt) runTT(A.tt.as_of + dir * A.tt.signal.path.length * step); };
+  const endTT = () => {
+    A.tt = null; A.fitted = false; setPick(false);
+    drawForecast(); drawHistory(); renderVerdict(); loadCandles();
+  };
+  const renderTT = () => {
+    const el = $("#verdict"), r = A.tt; if (!el || !r) return;
+    const s = r.signal, a = DIRS[s.direction] || DIRS.SAMPING;
+    const hrs = (s.path.length * step) / 3600;
+    const horizon = hrs >= 24 ? `${nf(hrs / 24, hrs % 24 ? 1 : 0)} hari` : `${nf(hrs, hrs % 1 ? 1 : 0)} jam`;
+    $("#ttNav").innerHTML = `<button class="btn sm ghost" id="ttPrev">◀ Earlier</button><button class="btn sm ghost" id="ttNext">Later ▶</button><button class="btn sm" id="ttEnd">Back to now</button>`;
+    $("#ttPrev").onclick = () => ttStep(-1); $("#ttNext").onclick = () => ttStep(1); $("#ttEnd").onclick = endTT;
+    const verdict = r.actual?.length ? (r.hit == null ? "" : r.hit
+      ? `<div class="notice ok"><b>Arah ramalan benar.</b> Harga ${r.actual_ret_pct >= 0 ? "naik" : "turun"} ${pct(r.actual_ret_pct)} ${r.complete ? `dalam ${horizon}` : `sejauh ini (${r.actual.length} dari ${s.path.length} candle)`}. Harga akhir meleset ${nf(r.err_pct, 2)}% dari perkiraan tengah${r.in_band ? ", masih di dalam rentang ramalan" : ", di luar rentang ramalan"}.</div>`
+      : `<div class="notice err"><b>Arah ramalan salah.</b> Harga ${r.actual_ret_pct >= 0 ? "naik" : "turun"} ${pct(r.actual_ret_pct)} ${r.complete ? `dalam ${horizon}` : `sejauh ini`}, padahal AI memperkirakan ${pct(s.exp_ret_pct)}. Meleset ${nf(r.err_pct, 2)}%${r.in_band ? ", tapi masih di dalam rentang ramalan" : ""}.</div>`)
+      : `<div class="notice">Belum ada candle sesudah titik ini.</div>`;
+    el.innerHTML = `
+      <div class="card-head"><h2>AI view</h2><small>${esc(fmtT(r.as_of))} WIB</small></div>
+      <p class="soft small" style="margin-top:0">Seandainya AI meramal saat candle ini tutup, hanya dengan data sampai saat itu.</p>
+      <div class="verdict-word ${a[0]}">${a[1]}</div>
+      <div class="soft">AI memperkirakan <b class="${tone(s.exp_ret_pct)}">${pct(s.exp_ret_pct)}</b> dalam ${horizon}.</div>
+      ${tug(s.prob_up, s.prob_down, "tug")}
+      <div class="tug-l"><span>Up <b class="up">${p0(s.prob_up)}</b></span><span>Down <b class="down">${p0(s.prob_down)}</b></span></div>
+      <h3 style="margin:16px 0 8px;font:700 16px/1.2 var(--display)">What happened next</h3>
+      ${verdict}
+      ${r.short_history ? `<p class="faint small">Data sebelum titik ini lebih pendek dari biasanya, jadi ramalannya kurang mewakili.</p>` : ""}
+      <p class="faint small" style="margin:12px 0 0">Klik <b>Time travel</b> lalu candle lain, atau pakai Earlier / Later untuk bergeser ${s.path.length} candle.</p>`;
+  };
   const renderVerdict = () => {
+    if (A.tt) return renderTT();
     const s = A.signal, el = $("#verdict"); if (!el) return;
     if (!s) {
       el.innerHTML = `<div class="card-head"><h2>Outlook</h2></div><div class="empty"><b>No forecast for ${esc(labelOf(A.sym))} yet</b>Tekan Run forecast supaya AI memperkirakan arah harga berikutnya.<br><button class="btn accent" id="fc2">Run forecast</button></div>`;
@@ -825,12 +888,19 @@ PAGES.chart = async (view, query) => {
   };
   const switchTo = () => {
     store.set(`kronos-chart-${m}`, A.sym);
-    A.fitted = false; A.signal = null; A.hist = null; A.histSeries = []; C = mkCharts(); renderQuick(); renderVerdict(); loadCandles(); loadSignal(); loadHistory();
+    A.fitted = false; A.signal = null; A.hist = null; A.histSeries = []; A.tt = null; A.limit = 0; $("#ttNav").innerHTML = ""; setPick(false); C = mkCharts(); renderQuick(); renderVerdict(); loadCandles(); loadSignal(); loadHistory();
     history.replaceState(null, "", `#/${m}/chart?${encodeURIComponent(A.sym)}`);
   };
   const pk = picker($("#symPick"), { venue: m, value: A.sym, onPick: (p) => { A.sym = p; switchTo(); } });
   seg($("#tfPick"), TF, A.tf, (v) => { A.tf = v; switchTo(); });
-  seg($("#histSeg"), { 0: "Off", 6: "6", 12: "12", 24: "24" }, String(A.histN), (v) => { A.histN = Number(v); store.set("kronos-hist-n", A.histN); A.fitted = false; loadCandles(); loadHistory(); });
+  $("#ttPick").onclick = () => setPick(!A.ttPick);
+  $("#ttAt").max = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 16);
+  $("#ttGo").onclick = () => {
+    const v = $("#ttAt").value;
+    if (!v) { toast("Pilih tanggal dan jam dulu.", "err"); return; }
+    runTT(Date.parse(v + ":00Z") / 1000);      // input dibaca sebagai jam WIB, sama seperti grafik
+  };
+  seg($("#histSeg"), { 0: "Off", 6: "6", 12: "12", 24: "24" }, String(A.histN), (v) => { A.histN = Number(v); store.set("kronos-hist-n", A.histN); if (!A.tt) A.fitted = false; loadCandles(); loadHistory(); });
   $("#fcBtn").onclick = (e) => busy(e.currentTarget, async () => {
     try { A.signal = (await api("/api/forecast", { symbol: A.sym, tf: A.tf })).signal; renderVerdict(); drawForecast(); toast(`${labelOf(A.sym)} forecast ready.`); }
     catch (err) { toast(err.message, "err", 7000); }
