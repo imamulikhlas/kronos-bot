@@ -358,6 +358,17 @@ tr.mark-row td { background: var(--card-2); }
 .results small { color: var(--ink-3); grid-column: 1 / -1; }
 pre.log { margin: 10px 0 0; padding: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; font-size: 12.5px; white-space: pre-wrap; max-height: 240px; overflow: auto; color: var(--ink-2); }
 
+/* ---------------- AI track record ---------------- */
+.hist-ctl { display: inline-flex; align-items: center; gap: 8px; }
+.track { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1.3fr); gap: 18px 28px; align-items: center; }
+.track-dots { display: flex; flex-wrap: wrap; gap: 5px; }
+.track-dots i { width: 16px; height: 16px; border-radius: 5px; background: var(--acc); border: 1px solid var(--ink); }
+.track-dots i.p { background: var(--up); border-color: var(--up); } .track-dots i.n { background: var(--down); border-color: var(--down); }
+.track-facts { margin: 0; display: grid; gap: 8px; font-size: 13.5px; }
+.track-facts div { display: grid; gap: 1px; } .track-facts dt { color: var(--ink-3); font-size: 12.5px; } .track-facts dd { margin: 0; font-weight: 650; }
+.track-facts small { font-weight: 500; margin-left: 4px; }
+.lab-row input[type=date] { max-width: 180px; }
+
 /* ---------------- scanner ---------------- */
 .scan-ctl { display: flex; flex-wrap: wrap; gap: 18px 22px; align-items: end; margin-bottom: 18px; }
 .scan-ctl .grow { flex: 1; }
@@ -496,7 +507,7 @@ details.how { margin-top: 16px; } details.how summary { cursor: pointer; } detai
   .head h1 { font-size: 28px; }
   .autopanel { grid-template-columns: 1fr; padding: 20px; margin-right: 4px; box-shadow: 4px 4px 0 var(--ink); }
   .autopanel .actions { min-width: 0; }
-  .halves, .choose-grid, .steps, .modecards, .lab, .devices, .picks { grid-template-columns: 1fr; }
+  .halves, .choose-grid, .steps, .modecards, .lab, .devices, .picks, .track { grid-template-columns: 1fr; }
   .subnav a { font-size: 10px; }
   .lab-row { grid-template-columns: 1fr; gap: 8px; } .lab-row > .k { padding-top: 0; }
   .estimate { position: static; }

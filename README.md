@@ -70,7 +70,9 @@ Buka **Backtest** di market yang kamu pilih, centang beberapa pair sekaligus, la
 | C | Lemah, bisa jadi kebetulan. Jangan dipakai live |
 | D | Hindari |
 
-Nilai A atau B hanya mungkin kalau dua syarat ini lolos: arah ramalan AI **terbukti lebih baik dari lempar koin** (uji statistik), dan hasil **walk-forward** positif.
+Nilai A atau B hanya mungkin kalau tiga syarat ini lolos: arah ramalan AI **terbukti lebih baik dari lempar koin** (uji statistik, peluang kebetulan di bawah 1%), hasil **walk-forward** positif, dan minimal 15 trade.
+
+**Period ends** memilih periode masa lalu yang diuji (sekarang, 1/3/6 bulan lalu, atau tanggal sendiri). Bandingkan beberapa periode untuk melihat apakah hasilnya tetap bagus di kondisi pasar yang berbeda.
 
 Yang dicek di backtest:
 - **AI accuracy:** persentase arah benar, akurasi sinyal kuat, kalibrasi peluang (kalau AI bilang 70% naik, apakah memang naik sekitar 70%), dan error besar gerakan dibanding menebak "tidak bergerak".
@@ -83,10 +85,31 @@ Tab **Best settings** mengurutkan setelan dari yang paling konsisten. Tombol **A
 
 ### Pakai GPU (VGA)
 
-- **NVIDIA (Windows):** `MULAI.bat` otomatis memasang PyTorch versi GPU kalau kartu NVIDIA terdeteksi (sekali saja, sekitar 2–3 GB). Kalau gagal, hapus file `.venv\gpu_checked` lalu jalankan MULAI lagi.
-- **Mac Apple Silicon (M1/M2/M3/M4):** GPU Metal dipakai otomatis.
-- Pilih **Compute → GPU** di Backtest, atau **Settings → AI model & compute** untuk robot. Dengan GPU, banyak titik waktu diramal sekaligus, biasanya 10–30× lebih cepat. Itu cukup untuk model **Accurate** dan 30–50 skenario ramalan.
-- GPU AMD dan Intel belum didukung, jadi robot tetap memakai CPU.
+Tidak harus NVIDIA. `MULAI.bat` mendeteksi kartu grafis lalu memasang pendukungnya, sekali saja:
+
+| Kartu grafis | Cara pakai |
+|---|---|
+| NVIDIA GeForce / RTX | CUDA, paling cepat |
+| AMD Radeon | DirectML (Windows) |
+| Intel Arc / Core Ultra | Intel XPU |
+| Mac M1–M4 | Metal, otomatis |
+
+Pilih **Compute → GPU** di Backtest, atau **Settings → AI model & compute** untuk robot dan Scanner. Kalau GPU gagal menjalankan sebuah operasi, robot otomatis pindah ke CPU dan tidak berhenti. Kalau pemasangan gagal, hapus file `.venv\gpu_checked_v2` lalu jalankan MULAI lagi.
+
+Dengan GPU, banyak titik waktu diramal sekaligus. Hasilnya jauh lebih cepat, cukup untuk model **Accurate** dan 30–50 skenario ramalan.
+
+### Lihat ramalan AI di masa lalu
+
+Di **Chart**, pilih **Past forecasts** (6, 12, atau 24). AI meramal ulang beberapa titik di masa lalu, hanya memakai data sebelum titik itu, lalu menggambar ramalannya di grafik:
+- hijau = arah benar;
+- merah = salah;
+- warna aksen = masih berjalan.
+
+Ringkasan **AI track record** menunjukkan berapa yang benar, rata-rata meleset harga akhir dibanding menebak "diam", dan seberapa sering harga berakhir di dalam rentang ramalan.
+
+### Ramalan ensemble
+
+**Settings → AI model & compute → Ensemble forecast** (aktif secara default) membagi skenario ke tiga panjang riwayat yang berbeda. Hasilnya, ramalan tidak bergantung pada satu jendela data. Perkiraan tengah juga dihitung dengan rata-rata terpangkas, supaya satu-dua skenario ekstrem tidak menyeret hasil.
 
 ## Forex lewat MetaTrader 5 (Windows)
 

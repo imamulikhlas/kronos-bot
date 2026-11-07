@@ -32,7 +32,8 @@ FOREX_WATCH = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "XAUUSD"]
 
 DEFAULTS = {
     "model": {"name": "NeoQuasar/Kronos-small", "tokenizer": "NeoQuasar/Kronos-Tokenizer-base", "device": "auto",
-              "lookback": 400, "pred_len": 12, "n_paths": 10, "temperature": 1.0, "top_p": 0.9},
+              "lookback": 400, "pred_len": 12, "n_paths": 10, "temperature": 1.0, "top_p": 0.9,
+              "ensemble": True},
     "paper": {"slippage_pct": 0.05},
     "loop": {"price_check_sec": 60, "delay_after_close_sec": 15},
     "db_path": "data/trader.db",

@@ -8,6 +8,7 @@ model:
   n_paths: 10
   temperature: 1.0
   top_p: 0.9
+  ensemble: true
 paper:
   slippage_pct: 0.05
 loop:

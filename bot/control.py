@@ -121,7 +121,7 @@ def backtest_running() -> bool:
 
 
 def start_backtest(symbols, tf: str, candles: int, every: int, optimize: bool = False,
-                   device: str = "auto", folds: int = 0):
+                   device: str = "auto", folds: int = 0, end: str | None = None):
     if backtest_running():
         return
     if isinstance(symbols, str):
@@ -130,6 +130,8 @@ def start_backtest(symbols, tf: str, candles: int, every: int, optimize: bool = 
             "--device", device]
     if folds:
         args += ["--folds", str(folds)]
+    if end:
+        args += ["--end", end]
     if optimize:
         args.append("--optimize")
     _spawn(args, BT_PID, BT_LOG, append=False)

@@ -426,7 +426,8 @@ def get_config(venue: str):
             "mode": v["mode"], "source": v.get("source"), "risk": v["risk"], "paper_balance": v["paper_balance"],
             "strategy": strat(venue_cfg(c, venue), venue),
             "model": {"size": model, "n_paths": c["model"]["n_paths"], "pred_len": c["model"]["pred_len"],
-                      "lookback": c["model"]["lookback"], "device": c["model"].get("device", "auto")}}
+                      "lookback": c["model"]["lookback"], "device": c["model"].get("device", "auto"),
+                      "ensemble": bool(c["model"].get("ensemble"))}}
 
 
 STRAT_TYPES = {"fee_pct": float, "min_expected_return_pct": float, "min_prob_up": float, "stop_loss_pct": float,
@@ -501,6 +502,8 @@ def save_config(venue: str, body: dict = Body(...)):
         c["model"]["lookback"] = min(int(c["model"]["lookback"]), 512)
     if m.get("device") in ("auto", "gpu", "cpu"):
         c["model"]["device"] = m["device"]
+    if "ensemble" in m:
+        c["model"]["ensemble"] = bool(m["ensemble"])
     return {"ok": True, "restarted": save_and_restart(c, venue)}
 
 
@@ -658,7 +661,7 @@ _forecaster = {"obj": None, "key": None}
 def get_forecaster(m):
     """Model AI bersama untuk panel (panggil di dalam _fc_lock)."""
     from bot.forecast import KronosForecaster
-    key = (m["name"], m["tokenizer"], m["n_paths"], m.get("device", "auto"))
+    key = (m["name"], m["tokenizer"], m["n_paths"], m.get("device", "auto"), bool(m.get("ensemble")))
     if _forecaster["key"] != key:
         _forecaster["obj"] = KronosForecaster({**m, "device": m.get("device", "auto")})
         _forecaster["key"] = key
@@ -703,6 +706,102 @@ def forecast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True
 
 
 _jobs: dict = {}
+
+
+@app.post("/api/hindcast")
+def hindcast(symbol: str = Body(..., embed=True), tf: str = Body(..., embed=True), count: int = Body(12, embed=True)):
+    """Ramalan AI di masa lalu (hanya memakai data sebelum titik itu) dibanding harga yang benar-benar terjadi."""
+    if not (KRONOS_DIR / "model").exists():
+        fail("Setup belum selesai: folder Kronos belum ada.")
+    if tf not in TFS:
+        fail("Timeframe tidak dikenal.")
+    count = max(3, min(40, int(count)))
+    jid = uuid.uuid4().hex[:8]
+    job = {"id": jid, "done": 0, "total": count, "finished": False, "error": "", "result": None}
+    _jobs[jid] = job
+
+    def work():
+        import backtest as bt
+        from bot.forecast import default_batch
+        try:
+            venue = venue_of(symbol)
+            c = vcfg(venue)
+            m, s = c["model"], strat(c, venue)
+            lb, h = int(m["lookback"]), int(m["pred_len"])
+            data = data_for(symbol)
+            df = data.history(symbol, tf, lb + (count + 2) * h + 5)
+            n = len(df)
+            # titik ramalan di grid tetap (tiap h candle) supaya hasil lama bisa dipakai ulang dari cache
+            grid = h * TF_SEC[tf] * 1000
+            tsv = df["ts"].to_numpy("int64")
+            origins = [t for t in range(lb, n + 1) if tsv[t - 1] % grid == 0][-count:]
+            if not origins:
+                raise RuntimeError(f"data hanya {n} candle")
+            job["total"] = len(origins)
+            cfile = bt.cache_path(symbol, tf, c, s, False)
+            cache = json.loads(cfile.read_text()) if cfile.exists() else {}
+            known = set(Signal.__dataclass_fields__)
+            sigs = {}
+            todo = []
+            for t in origins:
+                key = str(int(df["ts"].iloc[t - 1]))
+                if key in cache:
+                    sigs[t] = Signal(**{a: b for a, b in cache[key].items() if a in known})
+                    job["done"] += 1
+                else:
+                    todo.append(t)
+            if todo:
+                with _fc_lock:
+                    fc = get_forecaster(m)
+                    bs = default_batch(getattr(fc, "device", "cpu"))
+                    for i in range(0, len(todo), bs):
+                        chunk = todo[i:i + bs]
+                        items = []
+                        for t in chunk:
+                            hist = df.iloc[t - lb:t].reset_index(drop=True)
+                            items.append((hist, data.future_ts(hist["timestamps"].iloc[-1], tf, h)))
+                        for t, (hist, _), paths in zip(chunk, items, fc.paths_many(items)):
+                            sig = build_signal(symbol, hist, paths, s["fee_pct"], int(s["trend_period"]))
+                            sigs[t] = sig
+                            cache[str(int(hist["ts"].iloc[-1]))] = sig.__dict__
+                        job["done"] += len(chunk)
+                cfile.parent.mkdir(parents=True, exist_ok=True)
+                cfile.write_text(json.dumps(cache))
+            close = df["close"].to_numpy(float)
+            pts = []
+            for t in origins:
+                sig = sigs[t]
+                k = min(h, n - t)
+                actual = close[t:t + k]
+                if not len(actual):
+                    continue
+                act_ret = (actual[-1] / sig.last_close - 1) * 100
+                fin = sig.path[k - 1] if len(sig.path) >= k else sig.path[-1]
+                lo = sig.path_lo[k - 1] if sig.path_lo else None
+                hi = sig.path_hi[k - 1] if sig.path_hi else None
+                pts.append({"t0": wib_epoch(sig.time), "last_close": sig.last_close, "path": sig.path, "path_lo": sig.path_lo,
+                            "path_hi": sig.path_hi, "exp_ret_pct": sig.exp_ret_pct, "prob_up": sig.prob_up,
+                            "prob_down": sig.prob_down, "direction": sig.direction, "actual_ret_pct": float(act_ret),
+                            "hit": bool(np.sign(sig.exp_ret_pct) == np.sign(act_ret)) if act_ret else None,
+                            "err_pct": float(abs(fin / actual[-1] - 1) * 100),
+                            "in_band": bool(lo is not None and lo <= actual[-1] <= hi), "complete": k == h})
+            done_pts = [p for p in pts if p["complete"]]
+            rated = [p for p in done_pts if p["hit"] is not None]
+            hits = sum(p["hit"] for p in rated)
+            job["result"] = {"symbol": symbol, "tf": tf, "step": TF_SEC[tf], "points": pts,
+                             "summary": {"n": len(rated), "hits": hits, "hit": hits / len(rated) if rated else None,
+                                         "err_pct": float(np.mean([p["err_pct"] for p in done_pts])) if done_pts else None,
+                                         "naive_err_pct": float(np.mean([abs(p["actual_ret_pct"]) for p in done_pts])) if done_pts else None,
+                                         "in_band": float(np.mean([p["in_band"] for p in done_pts])) if done_pts else None,
+                                         "strong_n": sum(1 for p in rated if p["direction"] != "SAMPING"),
+                                         "strong_hits": sum(1 for p in rated if p["direction"] != "SAMPING" and p["hit"])}}
+        except Exception as e:  # noqa: BLE001
+            job["error"] = str(e)
+        finally:
+            job["finished"] = True
+
+    threading.Thread(target=work, daemon=True).start()
+    return {"job": jid}
 
 
 @app.post("/api/scan")
@@ -927,7 +1026,8 @@ def system():
 def bt_start(symbols: list = Body(None, embed=True), symbol: str = Body("", embed=True),
              tf: str = Body(..., embed=True), candles: int = Body(1000, embed=True),
              speed: int = Body(1, embed=True), optimize: bool = Body(True, embed=True),
-             device: str = Body("auto", embed=True), folds: int = Body(0, embed=True)):
+             device: str = Body("auto", embed=True), folds: int = Body(0, embed=True),
+             end: str = Body("", embed=True)):
     if ctl.backtest_running():
         fail("Backtest lain masih berjalan.")
     if not (KRONOS_DIR / "model").exists():
@@ -941,8 +1041,17 @@ def bt_start(symbols: list = Body(None, embed=True), symbol: str = Body("", embe
         fail("Timeframe tidak dikenal.")
     if device not in ("auto", "gpu", "cpu"):
         device = "auto"
+    if end:
+        try:
+            e = pd.Timestamp(end)
+        except Exception:  # noqa: BLE001
+            fail("Tanggal tidak valid.")
+        if e > pd.Timestamp.now():
+            end = ""
+        else:
+            end = e.strftime("%Y-%m-%d")
     ctl.start_backtest(syms[:12], tf, max(100, min(10000, int(candles))), max(1, int(speed)), optimize,
-                       device, max(0, min(10, int(folds))))
+                       device, max(0, min(10, int(folds))), end or None)
     return {"ok": True}
 
 
@@ -1014,7 +1123,8 @@ def bt_results(venue: str):
                     "hit": (m.get("accuracy") or {}).get("hit"), "n": (m.get("accuracy") or {}).get("n"),
                     "grade": g.get("letter"), "grade_label": g.get("label"),
                     "has_opt": og is not None, "candles": m.get("candles"),
-                    "device": (m.get("speed") or {}).get("device_name"),
+                    "device": (m.get("speed") or {}).get("device_name"), "end": m.get("end"),
+                    "period": m.get("period"),
                     "updated": time.strftime("%d %b, %H:%M", time.localtime(f.stat().st_mtime))})
     return {"results": out}
 
@@ -1039,7 +1149,7 @@ def bt_result(name: str):
     if m:
         res.update(symbol=m["symbol"], label=display(m["symbol"]), venue=m["venue"], tf=m["tf"],
                    metrics=m["metrics"], accuracy=m["accuracy"])
-        for k in ("quality", "segments", "montecarlo", "grade", "speed", "model", "period", "candles", "folds"):
+        for k in ("quality", "segments", "montecarlo", "grade", "speed", "model", "period", "candles", "folds", "end"):
             res[k] = m.get(k)
     eqf, trf, opf = BT_DIR / f"{name}_equity.csv", BT_DIR / f"{name}_trades.csv", BT_DIR / f"{name}_optimasi.json"
     if eqf.exists():

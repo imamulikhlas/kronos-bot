@@ -663,11 +663,13 @@ PAGES.chart = async (view, query) => {
   let watch = [];
   try { watch = (await api(`/api/${m}/config`)).watchlist; } catch { watch = (st?.symbols || []).map((x) => x.symbol); }
   const traded = (st?.symbols || []).map((x) => x.symbol);
-  const A = { sym: query || store.get(`kronos-chart-${m}`, traded[0] || watch[0]), tf: st?.timeframe || "1h", signal: null, fitted: false };
+  const A = { sym: query || store.get(`kronos-chart-${m}`, traded[0] || watch[0]), tf: st?.timeframe || "1h", signal: null, fitted: false,
+    histN: store.get("kronos-hist-n", 12), hist: null, histSeries: [], histJob: 0 };
   view.innerHTML = `
-    <div class="head"><div><h1>Chart</h1><p>Grafik live satu pair dan ke mana AI memperkirakan harganya bergerak. Garis tebal = perkiraan tengah, garis putus-putus = batas atas dan bawah kemungkinan.</p></div></div>
+    <div class="head"><div><h1>Chart</h1><p>Grafik live satu pair dan ke mana AI memperkirakan harganya bergerak. Garis tebal = perkiraan tengah, garis putus-putus = batas atas dan bawah kemungkinan. <b>Past forecasts</b> menampilkan ramalan AI di masa lalu dibanding harga yang benar-benar terjadi.</p></div></div>
     <div class="toolbar" style="margin-bottom:12px"><div class="quick" id="quick"></div></div>
     <div class="toolbar" style="margin-bottom:16px"><div id="symPick"></div><div id="tfPick"></div><div class="grow"></div>
+      <span class="hist-ctl"><span class="small soft">Past forecasts</span><span id="histSeg"></span></span>
       <button class="btn accent" id="fcBtn" data-busy="Forecasting…"><svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>Run forecast</button></div>
     <div class="grid split">
       <section class="card">
@@ -676,7 +678,8 @@ PAGES.chart = async (view, query) => {
         <div class="legend"><span><i style="background:var(--acc-text)"></i>AI forecast</span><span><i style="background:repeating-linear-gradient(90deg,var(--acc-text) 0 4px,transparent 4px 7px);opacity:.7"></i>forecast range</span><span><i style="background:var(--ink-3)"></i>EMA 50</span><span><i style="background:var(--ink)"></i>EMA 200 (trend)</span><span><i style="background:var(--ink-2);height:2px"></i>RSI</span></div>
       </section>
       <section class="card" id="verdict"></section>
-    </div>`;
+    </div>
+    <section class="card" id="hist" style="margin-top:16px"></section>`;
   const renderQuick = () => {
     $("#quick").innerHTML = watch.map((s) => `<button data-q="${esc(s)}" class="${s === A.sym ? "on" : ""}">${traded.includes(s) ? `<i title="auto trading"></i>` : ""}${esc(labelOf(s))}</button>`).join("");
     $$("[data-q]").forEach((b) => b.onclick = () => { A.sym = b.dataset.q; pk.set(A.sym); switchTo(); });
@@ -711,16 +714,76 @@ PAGES.chart = async (view, query) => {
     C.fc.setData(line(s.path));
     if (s.path_hi?.length) { C.hi.setData(line(s.path_hi)); C.lo.setData(line(s.path_lo)); } else { C.hi.setData([]); C.lo.setData([]); }
   };
+  const drawHistory = () => {
+    A.histSeries.forEach((x) => { try { C.main.removeSeries(x); } catch { /* sudah hilang */ } });
+    A.histSeries = [];
+    const h = A.hist;
+    const up = cssv("--up"), down = cssv("--down"), acc = cssv("--acc-text");
+    const fade = h && A.histN ? 0.3 : 1;
+    C.candles.applyOptions({ upColor: hexA(up, fade), downColor: hexA(down, fade), wickUpColor: hexA(up, fade), wickDownColor: hexA(down, fade) });
+    if (!h || !A.histN) { C.candles.setMarkers([]); return; }
+    const marks = [];
+    h.points.forEach((p) => {
+      const col = !p.complete ? acc : p.hit ? up : down;
+      const ser = C.main.addLineSeries({ color: col, lineWidth: 3, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+      ser.setData([{ time: p.t0, value: p.last_close }, ...p.path.map((v, i) => ({ time: p.t0 + h.step * (i + 1), value: v }))]);
+      A.histSeries.push(ser);
+      if (p.complete) marks.push({ time: p.t0, position: p.exp_ret_pct >= 0 ? "belowBar" : "aboveBar", color: col, shape: p.exp_ret_pct >= 0 ? "arrowUp" : "arrowDown", text: p.hit ? "✓" : "✕" });
+    });
+    C.candles.setMarkers(marks.sort((a, b) => a.time - b.time));
+  };
+  const renderHist = (state) => {
+    const el = $("#hist"); if (!el) return;
+    if (!A.histN) { el.hidden = true; return; }
+    el.hidden = false;
+    if (state === "loading") {
+      el.innerHTML = `<div class="card-head"><h2>AI track record</h2></div><div class="soft"><span class="spinner"></span> AI meramal ulang ${A.histN} titik di masa lalu, hanya memakai data sebelum titik itu…</div>`;
+      return;
+    }
+    if (state && state.error) { el.innerHTML = `<div class="card-head"><h2>AI track record</h2></div><div class="notice err">${esc(state.error)}</div>`; return; }
+    const h = A.hist; if (!h) return;
+    const sm = h.summary;
+    const hrs = (TF_SEC[A.tf] * (h.points[0]?.path.length || 12)) / 3600;
+    el.innerHTML = `<div class="card-head"><h2>AI track record</h2><small>${sm.n} ramalan lalu, masing-masing ${hrs >= 24 ? nf(hrs / 24, 1) + " hari" : nf(hrs, 0) + " jam"} ke depan</small></div>
+      <div class="track">
+        <div><div class="verdict-word ${sm.hit >= 0.5 ? "up" : "down"}" style="font-size:56px">${sm.hits}/${sm.n}</div><div class="soft small">arah benar (${p0(sm.hit)})</div></div>
+        <div class="track-dots">${h.points.map((p) => `<i class="${!p.complete ? "" : p.hit ? "p" : "n"}" title="${esc(new Date(p.t0 * 1000).toISOString().slice(5, 16).replace("T", " "))} · AI ${pct(p.exp_ret_pct)} · nyata ${pct(p.actual_ret_pct)}"></i>`).join("")}</div>
+        <dl class="track-facts">
+          <div><dt>Avg price error at the end</dt><dd>${nf(sm.err_pct, 2)}% <small class="${sm.err_pct < sm.naive_err_pct ? "up" : "down"}">${sm.err_pct < sm.naive_err_pct ? "lebih baik" : "lebih buruk"} dari menebak "diam" (${nf(sm.naive_err_pct, 2)}%)</small></dd></div>
+          <div><dt>Ended inside forecast range</dt><dd>${p0(sm.in_band)} <small class="faint">idealnya sekitar 80%</small></dd></div>
+          <div><dt>Strong Up/Down signals right</dt><dd>${sm.strong_n ? `${sm.strong_hits}/${sm.strong_n}` : "–"}</dd></div>
+        </dl>
+      </div>
+      <p class="faint small" style="margin:12px 0 0">Garis hijau = arah ramalan benar, merah = salah, warna aksen = masih berjalan. Ini contoh kecil. Untuk penilaian yang lebih kuat, jalankan Backtest.</p>`;
+  };
+  const loadHistory = async () => {
+    if (!A.histN) { A.hist = null; drawHistory(); renderHist(); return; }
+    const my = ++A.histJob;
+    renderHist("loading");
+    try {
+      const { job } = await api("/api/hindcast", { symbol: A.sym, tf: A.tf, count: A.histN });
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1200));
+        if (my !== A.histJob || !$("#hist")) return;
+        const j = await api(`/api/scan/${job}`);
+        if (j.finished) {
+          if (j.error) { renderHist({ error: `Gagal meramal ulang: ${j.error}` }); return; }
+          A.hist = j.result; drawHistory(); renderHist(); return;
+        }
+        const el = $("#hist .soft"); if (el) el.innerHTML = `<span class="spinner"></span> AI meramal ulang titik di masa lalu… ${j.done}/${j.total}`;
+      }
+    } catch (e) { renderHist({ error: e.message }); }
+  };
   const loadCandles = async () => {
     try {
-      const d = await api(`/api/candles?symbol=${encodeURIComponent(A.sym)}&tf=${A.tf}&limit=300`);
+      const d = await api(`/api/candles?symbol=${encodeURIComponent(A.sym)}&tf=${A.tf}&limit=${A.histN > 12 ? 500 : 300}`);
       if (!$("#phPx")) return;
       step = d.step;
       C.candles.setData(d.candles);
       C.vol.setData(d.volume.map((v) => ({ time: v.time, value: v.value, color: hexA(v.up ? cssv("--up") : cssv("--down"), 0.22) })));
       C.e50.setData(d.ema50); C.e200.setData(d.ema200); C.rs.setData(d.rsi);
       drawForecast();
-      if (!A.fitted) { C.main.timeScale().setVisibleLogicalRange({ from: d.candles.length - 110, to: d.candles.length + 16 }); A.fitted = true; }
+      if (!A.fitted) { C.main.timeScale().setVisibleLogicalRange({ from: d.candles.length - (A.histN ? Math.min(d.candles.length - 1, A.histN * 13 + 20) : 110), to: d.candles.length + 16 }); A.fitted = true; }
       const chg = d.prev_close ? (d.last / d.prev_close - 1) * 100 : null;
       $("#phSym").innerHTML = pair(d.label);
       $("#phPx").textContent = price(d.last, A.sym);
@@ -762,17 +825,19 @@ PAGES.chart = async (view, query) => {
   };
   const switchTo = () => {
     store.set(`kronos-chart-${m}`, A.sym);
-    A.fitted = false; A.signal = null; C = mkCharts(); renderQuick(); renderVerdict(); loadCandles(); loadSignal();
+    A.fitted = false; A.signal = null; A.hist = null; A.histSeries = []; C = mkCharts(); renderQuick(); renderVerdict(); loadCandles(); loadSignal(); loadHistory();
     history.replaceState(null, "", `#/${m}/chart?${encodeURIComponent(A.sym)}`);
   };
   const pk = picker($("#symPick"), { venue: m, value: A.sym, onPick: (p) => { A.sym = p; switchTo(); } });
   seg($("#tfPick"), TF, A.tf, (v) => { A.tf = v; switchTo(); });
+  seg($("#histSeg"), { 0: "Off", 6: "6", 12: "12", 24: "24" }, String(A.histN), (v) => { A.histN = Number(v); store.set("kronos-hist-n", A.histN); A.fitted = false; loadCandles(); loadHistory(); });
   $("#fcBtn").onclick = (e) => busy(e.currentTarget, async () => {
     try { A.signal = (await api("/api/forecast", { symbol: A.sym, tf: A.tf })).signal; renderVerdict(); drawForecast(); toast(`${labelOf(A.sym)} forecast ready.`); }
     catch (err) { toast(err.message, "err", 7000); }
   });
   renderQuick(); renderVerdict();
   history.replaceState(null, "", `#/${m}/chart?${encodeURIComponent(A.sym)}`);
+  loadHistory();
   every(10000, loadCandles);
   every(30000, loadSignal);
 };
@@ -837,13 +902,14 @@ PAGES.backtest = async (view) => {
 
   view.innerHTML = `
     <div class="head"><div><h1>Backtest lab</h1><p>Robot ${MKT[m]} trading pura-pura di data lama, lalu dinilai A sampai D. Hasilnya menjawab dua hal: apakah ramalan AI benar-benar tepat di pair ini, dan setelan apa yang paling konsisten.</p></div></div>
-    ${sys?.gpu_unused ? `<div class="notice warn" style="margin-bottom:16px"><b>Kartu grafis NVIDIA terdeteksi, tapi belum dipakai.</b> Tutup panel lalu jalankan MULAI lagi. Versi GPU dipasang otomatis (sekali saja, sekitar 2–3 GB). Kalau sudah pernah dicoba, hapus file <code>.venv\\gpu_checked</code> dulu.</div>` : ""}
+    ${sys?.gpu_unused ? `<div class="notice warn" style="margin-bottom:16px"><b>Kartu grafis ${esc(sys.gpu_unused_name || "")} terdeteksi, tapi belum dipakai.</b> Tutup panel lalu jalankan MULAI lagi. Pendukung GPU-nya (NVIDIA: CUDA, AMD/Intel: DirectML atau XPU) dipasang otomatis, sekali saja. Kalau sudah pernah dicoba, hapus file <code>.venv\\gpu_checked_v2</code> dulu.</div>` : ""}
     <div id="runArea"></div>
     <div class="lab">
       <section class="card lab-form">
         <div class="lab-row"><div class="k">Pairs<small>bisa lebih dari satu</small></div><div class="pairpick" id="pp"></div></div>
         <div class="lab-row"><div class="k">Timeframe</div><div id="tfSeg"></div></div>
         <div class="lab-row"><div class="k">History<small id="spanTxt"></small></div><div id="cSeg"></div></div>
+        <div class="lab-row"><div class="k">Period ends<small>uji masa lalu</small></div><div><div class="toolbar"><div id="endSeg"></div><input type="date" class="input" id="endDate" hidden></div><div class="hint" id="endHint" style="margin-top:6px"></div></div></div>
         <div class="lab-row"><div class="k">Forecast every</div><div><div id="eSeg"></div><div class="hint" style="margin-top:6px">Tiap candle = paling mirip robot live. Lebih jarang = lebih cepat, tapi lebih kasar.</div></div></div>
         <div class="lab-row"><div class="k">Compute</div><div class="devices" id="dev"></div></div>
         <div class="lab-row"><div class="k">Optimize</div>
@@ -865,7 +931,7 @@ PAGES.backtest = async (view) => {
       save(); renderPairs(); renderEst();
     });
   };
-  const gpuName = sys?.gpu || null;
+  const gpuName = sys?.gpu ? `${sys.gpu}${sys.backend ? ` (${sys.backend})` : ""}` : null;
   const renderDev = () => {
     const opts = [
       ["auto", "Auto", gpuName ? `pakai ${gpuName}` : "pakai CPU, GPU tidak terdeteksi"],
@@ -894,18 +960,40 @@ PAGES.backtest = async (view) => {
         <div><dt>AI model</dt><dd>${esc(String(mdl.name).split("/").pop())} · ${mdl.n_paths} skenario</dd></div>
       </dl>
       <button class="btn dark lg" id="btGo" data-busy="Starting…" ${F.syms.length ? "" : "disabled"}>Run backtest</button>
-      ${!usesGpu ? `<p class="faint small" style="margin:0">Punya kartu grafis NVIDIA? Pilih GPU supaya 10–30× lebih cepat.</p>` : ""}`;
+      ${!usesGpu ? `<p class="faint small" style="margin:0">Punya kartu grafis (NVIDIA, AMD, Intel Arc, atau Mac M-series)? Pilih GPU supaya jauh lebih cepat.</p>` : ""}`;
     $("#btGo").onclick = (e) => busy(e.currentTarget, async () => {
       try {
-        await api("/api/backtest/start", { symbols: F.syms, tf: F.tf, candles: F.candles, speed: F.every, optimize: F.opt, device: F.device });
+        await api("/api/backtest/start", { symbols: F.syms, tf: F.tf, candles: F.candles, speed: F.every, optimize: F.opt, device: F.device, end: endStr() });
         toast("Backtest started."); poll();
       } catch (err) { toast(err.message, "err"); }
     });
   };
   renderPairs(); renderDev();
-  seg($("#tfSeg"), TF, F.tf, (v) => { F.tf = v; save(); renderEst(); });
-  seg($("#cSeg"), Object.fromEntries(CANDLE_OPTS.map((n) => [n, nf(n, 0)])), String(F.candles), (v) => { F.candles = Number(v); save(); renderEst(); });
+  seg($("#tfSeg"), TF, F.tf, (v) => { F.tf = v; save(); renderEst(); renderEnd(); });
+  seg($("#cSeg"), Object.fromEntries(CANDLE_OPTS.map((n) => [n, nf(n, 0)])), String(F.candles), (v) => { F.candles = Number(v); save(); renderEst(); renderEnd(); });
+  const endStr = () => {
+    if (F.endMode === "now" || !F.endMode) return "";
+    if (F.endMode === "custom") return F.endDate || "";
+    const days = Number(String(F.endMode).replace("d", ""));
+    if (!days) return "";
+    const d = new Date(Date.now() - days * 86400000);
+    return d.toISOString().slice(0, 10);
+  };
+  const renderEnd = () => {
+    $("#endDate").hidden = F.endMode !== "custom";
+    const e = endStr();
+    const startD = new Date((e ? new Date(e + "T23:59").getTime() : Date.now()) - F.candles * TF_SEC[F.tf] * 1000 * (m === "forex" ? 1.4 : 1));
+    const fmt = (d) => d.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
+    $("#endHint").innerHTML = `Diuji kira-kira <b>${fmt(startD)}</b> sampai <b>${e ? fmt(new Date(e)) : "sekarang"}</b>.`
+      + (m === "forex" && ["15m", "30m"].includes(F.tf) ? " Data Yahoo untuk 15/30 menit hanya sekitar 60 hari terakhir; dengan MT5 bisa lebih jauh." : "")
+      + " Bandingkan beberapa periode untuk melihat apakah hasilnya konsisten di kondisi pasar berbeda.";
+  };
+  seg($("#endSeg"), { now: "Now", d30: "1 month ago", d90: "3 months ago", d180: "6 months ago", custom: "Pick date" }, String(F.endMode || "now"), (v) => { F.endMode = v; save(); renderEnd(); });
+  $("#endDate").value = F.endDate || "";
+  $("#endDate").max = new Date().toISOString().slice(0, 10);
+  $("#endDate").onchange = (e) => { F.endDate = e.target.value; save(); renderEnd(); };
   seg($("#eSeg"), { 1: "Every candle", 2: "Every 2", 4: "Every 4" }, String(F.every), (v) => { F.every = Number(v); save(); renderEst(); });
+  renderEnd();
   $("#opt").checked = F.opt;
   $("#opt").onchange = (e) => { F.opt = e.target.checked; save(); };
   renderEst();
@@ -934,7 +1022,7 @@ PAGES.backtest = async (view) => {
     if (!$("#btList")) return;
     $("#btList").innerHTML = results.length ? results.map((r) => `<button data-r="${esc(r.name)}" class="${r.name === selected ? "on" : ""}">
         ${gradeBadge(r.grade)}<span>${pair(r.label)} <span class="faint small">${esc(TF[r.tf] || r.tf)}</span></span><b class="${tone(r.return_pct)}">${pct(r.return_pct, 1)}</b>
-        <small>${r.hit != null ? `arah benar ${p0(r.hit)} · ` : ""}${esc(r.updated)}${r.dummy ? " · ramalan acak" : ""}</small></button>`).join("")
+        <small>${r.hit != null ? `arah benar ${p0(r.hit)} · ` : ""}${r.period ? `${esc(String(r.period[0]).slice(0, 10))} → ${esc(String(r.period[1]).slice(0, 10))}` : esc(r.updated)}${r.dummy ? " · ramalan acak" : ""}</small></button>`).join("")
       : `<div class="empty"><b>No results yet</b>Pilih pair di atas lalu tekan Run backtest.</div>`;
     $$("[data-r]").forEach((b) => b.onclick = () => openResult(b.dataset.r));
     if (!selected && results.length) openResult(results[0].name);
@@ -995,7 +1083,7 @@ PAGES.backtest = async (view) => {
         c.timeScale().fitContent();
       }
     } else if (tab === "ai") {
-      const sig = q.p_value != null && q.p_value < 0.05 && q.hit > 0.5;
+      const sig = q.p_value != null && q.p_value < 0.01 && q.hit > 0.5;
       el.innerHTML = q.n ? `
         <p class="soft" style="margin-top:0">Dinilai dari ${nf(q.n, 0)} ramalan di periode ini, terlepas dari setelan robot. Ini jawaban jujur untuk pertanyaan "seberapa tepat AI di ${esc(r.label)}?"</p>
         <div class="mgrid">
@@ -1127,8 +1215,9 @@ PAGES.settings = async (view) => {
         <div class="stack" style="gap:16px">
           <div class="choices" id="models">${Object.entries(MODELS).map(([k, t]) => `<button type="button" class="choice" data-model="${k}"><b>${t[0]}</b><span>${t[1]}</span></button>`).join("")}</div>
           <div class="field"><span class="label">Run the AI on</span><div id="devSeg"></div>
-            <div class="hint">${sys.gpu ? `Terdeteksi: <b>${esc(sys.gpu)}</b>${sys.vram_gb ? ` (${nf(sys.vram_gb, 0)} GB)` : ""}.` : sys.gpu_unused ? "Kartu grafis NVIDIA terdeteksi tapi PyTorch versi CPU. Tutup panel lalu jalankan MULAI lagi untuk memasang versi GPU." : "Tidak ada GPU yang bisa dipakai. Robot memakai CPU."}</div></div>
+            <div class="hint">${sys.gpu ? `Terdeteksi: <b>${esc(sys.gpu)}</b>${sys.vram_gb ? ` (${nf(sys.vram_gb, 0)} GB)` : ""}.` : sys.gpu_unused ? `Kartu grafis ${esc(sys.gpu_unused_name || "")} terdeteksi tapi belum dipakai. Tutup panel lalu jalankan MULAI lagi untuk memasang pendukung GPU-nya.` : "Tidak ada GPU yang bisa dipakai. Robot memakai CPU."}</div></div>
           <div class="fields">
+            ${sw("model.ensemble", "Ensemble forecast", "skenario dibagi ke 3 panjang riwayat berbeda, ramalan lebih stabil, beban hampir sama")}
             ${num("model.n_paths", { label: "Forecast scenarios", unit: "paths", step: 1, min: 2, max: 100, hint: "makin banyak, peluang naik/turun makin stabil. GPU: 30–50" })}
             ${num("model.lookback", { label: "History the AI reads", unit: "candles", step: 16, min: 64, max: 2048, hint: "Light: s/d 2048 · lainnya s/d 512" })}
             ${num("model.pred_len", { label: "Forecast horizon", unit: "candles", step: 1, min: 2, max: 120 })}</div>

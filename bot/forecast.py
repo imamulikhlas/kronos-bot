@@ -57,59 +57,124 @@ class Signal:
                 f"| RSI {self.rsi:.0f} | {acc}")
 
 
-def system_info() -> dict:
-    """Perangkat komputasi yang tersedia (GPU NVIDIA / Apple, atau CPU)."""
-    import os
+def os_gpus() -> list[str]:
+    """Nama kartu grafis menurut sistem operasi (terlepas dari PyTorch)."""
     import platform
     import shutil
-    info = {"torch": None, "cuda": False, "cuda_build": None, "gpu": None, "vram_gb": None, "mps": False,
+    import subprocess
+    names = []
+    try:
+        if platform.system() == "Windows":
+            out = subprocess.run(["powershell", "-NoProfile", "-Command",
+                                  "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name"],
+                                 capture_output=True, text=True, timeout=15).stdout
+            names = [x.strip() for x in out.splitlines() if x.strip()]
+        elif platform.system() == "Linux" and shutil.which("lspci"):
+            out = subprocess.run(["lspci"], capture_output=True, text=True, timeout=10).stdout
+            names = [ln.split(": ", 1)[-1] for ln in out.splitlines() if " VGA " in ln or "3D controller" in ln]
+    except Exception:  # noqa: BLE001
+        pass
+    return [n for n in names if not any(k in n for k in ("Basic Display", "Remote Display", "Virtual", "VMware"))]
+
+
+def gpu_vendor(name: str) -> str:
+    n = (name or "").lower()
+    if "nvidia" in n or "geforce" in n or "rtx" in n or "quadro" in n:
+        return "nvidia"
+    if "amd" in n or "radeon" in n or "advanced micro" in n:
+        return "amd"
+    if "intel" in n or " arc" in n or "iris" in n:
+        return "intel"
+    if "apple" in n:
+        return "apple"
+    return "other"
+
+
+def _dml():
+    try:
+        import torch_directml  # noqa: F401
+        return torch_directml if torch_directml.device_count() > 0 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def system_info() -> dict:
+    """GPU yang bisa dipakai PyTorch: NVIDIA/AMD (CUDA/ROCm), Intel (XPU), Apple (Metal),
+    atau GPU apa saja di Windows lewat DirectML."""
+    import os
+    import platform
+    info = {"torch": None, "gpu": None, "vram_gb": None, "backend": None, "best": "cpu",
             "cpu": platform.processor() or platform.machine(), "threads": os.cpu_count() or 1,
-            "nvidia_driver": bool(shutil.which("nvidia-smi")), "best": "cpu"}
+            "os": platform.system(), "os_gpus": os_gpus()}
     try:
         import torch
         info["torch"] = torch.__version__
-        info["cuda_build"] = torch.version.cuda
         if torch.cuda.is_available():
             p = torch.cuda.get_device_properties(0)
-            info.update(cuda=True, gpu=p.name, vram_gb=round(p.total_memory / 1024 ** 3, 1), best="cuda")
+            rocm = bool(getattr(torch.version, "hip", None))
+            info.update(gpu=p.name, vram_gb=round(p.total_memory / 1024 ** 3, 1), best="cuda",
+                        backend="ROCm" if rocm else "CUDA")
+        elif hasattr(torch, "xpu") and torch.xpu.is_available():
+            info.update(gpu=torch.xpu.get_device_name(0), best="xpu", backend="Intel XPU")
         elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-            info.update(mps=True, gpu="Apple GPU (Metal)", best="mps")
+            info.update(gpu="Apple GPU", best="mps", backend="Metal")
+        else:
+            dml = _dml()
+            if dml is not None:
+                info.update(gpu=dml.device_name(0), best="dml", backend="DirectML")
     except Exception as e:  # noqa: BLE001
         info["error"] = str(e)
-    # GPU NVIDIA ada, tapi PyTorch versi CPU: perlu dipasang ulang (MULAI melakukannya otomatis)
-    info["gpu_unused"] = info["nvidia_driver"] and not info["cuda"]
+    real = [g for g in info["os_gpus"] if gpu_vendor(g) in ("nvidia", "amd", "intel")]
+    info["gpu_unused"] = bool(real) and info["best"] == "cpu"
+    info["gpu_unused_name"] = real[0] if info["gpu_unused"] else None
     return info
 
 
-def resolve_device(pref: str | None) -> str:
-    """'auto' | 'gpu' | 'cpu' | 'cuda' | 'mps' -> nama device PyTorch."""
+def resolve_device(pref: str | None):
+    """'auto' | 'gpu' | 'cpu' -> device PyTorch terbaik yang tersedia."""
     import torch
     pref = (pref or "auto").lower()
-    has_cuda = torch.cuda.is_available()
-    has_mps = bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available())
     if pref == "cpu":
         return "cpu"
-    if pref in ("auto", "gpu", "cuda", "mps"):
-        if has_cuda and pref != "mps":
-            return "cuda:0"
-        if has_mps and pref != "cuda":
-            return "mps"
-        if pref in ("gpu", "cuda", "mps"):
-            log.warning("GPU diminta tetapi tidak terdeteksi oleh PyTorch, memakai CPU.")
-        return "cpu"
-    return pref
+    if torch.cuda.is_available():
+        return "cuda:0"
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        return "xpu"
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return "mps"
+    dml = _dml()
+    if dml is not None:
+        return dml.device(0)
+    if pref == "gpu":
+        log.warning("GPU diminta tetapi tidak terdeteksi oleh PyTorch, memakai CPU.")
+    return "cpu"
 
 
-def default_batch(device: str) -> int:
+def device_kind(device) -> str:
+    d = str(device)
+    return "cuda" if d.startswith("cuda") else "xpu" if d.startswith("xpu") else \
+        "mps" if d == "mps" else "dml" if d.startswith("privateuseone") else "cpu"
+
+
+def default_batch(device) -> int:
     """Berapa titik waktu diramal sekaligus (x n_paths skenario)."""
-    if device.startswith("cuda"):
+    kind = device_kind(device)
+    if kind == "cuda":
         try:
             import torch
             vram = torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
         except Exception:  # noqa: BLE001
             vram = 4
         return 64 if vram >= 16 else 32 if vram >= 8 else 16
-    return 8 if device == "mps" else 2
+    return {"xpu": 16, "mps": 8, "dml": 8}.get(kind, 2)
+
+
+def ensemble_lookbacks(lookback: int, on: bool) -> list[int]:
+    """Ensemble: skenario dibagi ke beberapa panjang riwayat supaya ramalan tidak bergantung pada satu jendela."""
+    if not on:
+        return [lookback]
+    out = [lookback, int(lookback * 0.75), int(lookback * 0.5)]
+    return [x for x in dict.fromkeys(max(64, x) for x in out)]
 
 
 class KronosForecaster:
@@ -123,47 +188,72 @@ class KronosForecaster:
         from model import Kronos, KronosPredictor, KronosTokenizer  # noqa: E402
 
         self.device = resolve_device(device or mcfg.get("device", "auto"))
-        if self.device == "cpu":
-            torch.set_num_threads(max(1, (torch.get_num_threads() or 1)))
+        self.kind = device_kind(self.device)
         t0 = time.time()
         log.info("Memuat model %s (pertama kali akan mengunduh dari Hugging Face)...", mcfg["name"])
-        tokenizer = KronosTokenizer.from_pretrained(mcfg["tokenizer"])
-        model = Kronos.from_pretrained(mcfg["name"])
-        tokenizer.eval()
-        model.eval()
-        ctx = 2048 if "mini" in mcfg["name"] else 512
-        self.predictor = KronosPredictor(model, tokenizer, device=self.device, max_context=ctx)
-        name = self.device
-        if self.device.startswith("cuda"):
+        self._tok = KronosTokenizer.from_pretrained(mcfg["tokenizer"])
+        self._model = Kronos.from_pretrained(mcfg["name"])
+        self._tok.eval()
+        self._model.eval()
+        self._ctx = 2048 if "mini" in mcfg["name"] else 512
+        self._Pred = KronosPredictor
+        self.predictor = KronosPredictor(self._model, self._tok, device=self.device, max_context=self._ctx)
+        if self.kind == "cuda":
             name = f"GPU {torch.cuda.get_device_name(0)}"
-        elif self.device == "mps":
+        elif self.kind == "xpu":
+            name = f"GPU {torch.xpu.get_device_name(0)}"
+        elif self.kind == "mps":
             name = "GPU Apple (Metal)"
+        elif self.kind == "dml":
+            name = f"GPU {_dml().device_name(0)} (DirectML)"
         else:
             name = f"CPU ({torch.get_num_threads()} thread)"
         self.device_name = name
         log.info("Model siap di %s (%.1f detik)", name, time.time() - t0)
         self.cfg = mcfg
 
-    def paths_many(self, items: list) -> list:
-        """items: [(hist, y_ts), ...] dengan panjang sama. Return list array (n_paths, pred_len, 4)."""
+    def _to_cpu(self, err):
+        """GPU gagal (operasi tidak didukung / memori habis): lanjut di CPU, tidak berhenti."""
         import torch
-        n = int(self.cfg.get("n_paths", 10))
-        dfs, xts, yts = [], [], []
-        for hist, y_ts in items:
-            x = hist[COLS].reset_index(drop=True)
-            xt = hist["timestamps"].reset_index(drop=True)
-            yt = pd.Series(y_ts).reset_index(drop=True)
-            dfs += [x] * n
-            xts += [xt] * n
-            yts += [yt] * n
-        with torch.inference_mode():
-            outs = self.predictor.predict_batch(
+        log.warning("GPU gagal (%s). Pindah ke CPU.", str(err).splitlines()[0][:200])
+        self.device, self.kind = "cpu", "cpu"
+        self.device_name = f"CPU ({torch.get_num_threads()} thread, GPU gagal)"
+        self.predictor = self._Pred(self._model.cpu(), self._tok.cpu(), device="cpu", max_context=self._ctx)
+
+    def _run(self, dfs, xts, yts):
+        import torch
+        ctx = torch.no_grad() if self.kind == "dml" else torch.inference_mode()
+        with ctx:
+            return self.predictor.predict_batch(
                 df_list=dfs, x_timestamp_list=xts, y_timestamp_list=yts,
                 pred_len=len(yts[0]), T=float(self.cfg.get("temperature", 1.0)),
                 top_p=float(self.cfg.get("top_p", 0.9)), sample_count=1, verbose=False,
             )
-        arr = np.stack([o[["open", "high", "low", "close"]].to_numpy(dtype=float) for o in outs])
-        return [arr[i * n:(i + 1) * n] for i in range(len(items))]
+
+    def paths_many(self, items: list) -> list:
+        """items: [(hist, y_ts), ...]. Return list array (n_paths, pred_len, 4) per item."""
+        n = int(self.cfg.get("n_paths", 10))
+        lbs = ensemble_lookbacks(min(len(h) for h, _ in items), bool(self.cfg.get("ensemble")))
+        per = n if len(lbs) == 1 else max(4, -(-n // len(lbs)))
+        result = [[] for _ in items]
+        for lb in lbs:
+            dfs, xts, yts = [], [], []
+            for hist, y_ts in items:
+                h = hist.tail(lb).reset_index(drop=True)
+                dfs += [h[COLS]] * per
+                xts += [h["timestamps"]] * per
+                yts += [pd.Series(y_ts).reset_index(drop=True)] * per
+            try:
+                outs = self._run(dfs, xts, yts)
+            except Exception as e:  # noqa: BLE001
+                if self.kind == "cpu":
+                    raise
+                self._to_cpu(e)
+                outs = self._run(dfs, xts, yts)
+            arr = np.stack([o[["open", "high", "low", "close"]].to_numpy(dtype=float) for o in outs])
+            for i in range(len(items)):
+                result[i].append(arr[i * per:(i + 1) * per])
+        return [np.concatenate(r, axis=0) for r in result]
 
     def paths(self, hist: pd.DataFrame, y_ts: pd.Series) -> np.ndarray:
         """Return array (n_paths, pred_len, 4) berisi open/high/low/close tiap skenario."""
@@ -212,7 +302,9 @@ def build_signal(symbol: str, hist: pd.DataFrame, paths: np.ndarray, fee_pct: fl
     lo = float(np.median(paths[:, :, 2].min(axis=1)))
     up = max(0.0, (hi / last - 1) * 100)
     down = max(0.0, (1 - lo / last) * 100)
-    exp_ret = float(rets.mean() * 100)
+    srt = np.sort(rets)
+    cut = len(srt) // 10 if len(srt) >= 10 else 0
+    exp_ret = float(srt[cut:len(srt) - cut].mean() * 100)   # rata-rata terpangkas: tahan skenario ekstrem
     snap = snapshot(hist, trend_period)
     closes = paths[:, :, 3]
     return Signal(

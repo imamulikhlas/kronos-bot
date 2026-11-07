@@ -71,8 +71,8 @@ def load_candles(cfg, symbol, tf, n, csv):
 
 def cache_path(symbol, tf, cfg, s, dummy):
     m = cfg["model"]
-    key = {k: m.get(k) for k in ["name", "lookback", "pred_len", "n_paths", "temperature", "top_p"]}
-    key |= {"fee": s["fee_pct"], "trend": s["trend_period"], "dummy": dummy, "v": 4}
+    key = {k: m.get(k) for k in ["name", "lookback", "pred_len", "n_paths", "temperature", "top_p", "ensemble"]}
+    key |= {"fee": s["fee_pct"], "trend": s["trend_period"], "dummy": dummy, "v": 5}
     h = hashlib.md5(json.dumps(key, sort_keys=True).encode()).hexdigest()[:8]
     return OUT / f"cache_{safe(symbol)}_{tf}_{h}.json"
 
@@ -397,10 +397,12 @@ def grade(quality, full_m, segs, mc, wf_total=None):
     """Nilai akhir A-D dengan alasan yang bisa dibaca."""
     cons = float(np.mean([x["return_pct"] > 0 for x in segs])) if segs else 0.0
     checks = []
-    acc_ok = bool(quality.get("hit") and quality["hit"] > 0.5 and (quality.get("p_value") or 1) < 0.05)
+    acc_ok = bool(quality.get("hit") and quality["hit"] > 0.5 and (quality.get("p_value") or 1) < 0.01)
     checks.append({"ok": acc_ok, "key": "edge",
                    "text": (f"Arah ramalan benar {quality['hit']:.0%} dari {quality['n']}, " +
-                            ("terbukti lebih baik dari lempar koin." if acc_ok else "belum terbukti lebih baik dari lempar koin."))
+                            ("terbukti lebih baik dari lempar koin." if acc_ok else
+                             ("ada tanda lebih baik dari lempar koin, tapi belum cukup kuat." if quality.get("hit", 0) > 0.5 and (quality.get("p_value") or 1) < 0.05
+                              else "belum terbukti lebih baik dari lempar koin.")))
                    if quality.get("n") else "Belum ada ramalan untuk dinilai."})
     if wf_total is not None:
         checks.append({"ok": wf_total > 0, "key": "walkforward",
@@ -420,7 +422,8 @@ def grade(quality, full_m, segs, mc, wf_total=None):
     pts = sum(c["ok"] for c in checks)
     letter = "A" if pts >= len(checks) - 0 else "B" if pts >= len(checks) - 2 else "C" if pts >= len(checks) - 4 else "D"
     # syarat mutlak: tanpa bukti keunggulan AI atau tanpa hasil positif yang jujur, maksimal C
-    if letter in ("A", "B") and not (checks[0]["ok"] and checks[1]["ok"]):
+    # syarat mutlak untuk A/B: keunggulan AI terbukti, hasil positif yang jujur, dan trade cukup banyak
+    if letter in ("A", "B") and not (checks[0]["ok"] and checks[1]["ok"] and full_m["trades"] >= 15):
         letter = "C"
     label = {"A": "Ready to try live", "B": "Promising", "C": "Weak", "D": "Avoid"}[letter]
     notes = []
@@ -534,7 +537,18 @@ def run_symbol(symbol, full, args, log, prog, forecaster_box):
     lookback, pred_len = int(cfg["model"]["lookback"]), int(cfg["model"]["pred_len"])
 
     prog(0.01, f"{symbol}: mengambil data {tf}")
-    df, data = load_candles(cfg, symbol, tf, args.candles + lookback + pred_len, args.csv)
+    extra = 0
+    end = None
+    if args.end:
+        end = pd.Timestamp(args.end)
+        if end.hour == 0 and end.minute == 0:
+            end = end + pd.Timedelta(hours=23, minutes=59)
+        now = pd.Timestamp.utcnow().tz_localize(None) + pd.Timedelta(hours=7)
+        extra = max(0, int((now - end).total_seconds() // TF_SEC.get(tf, 3600)) + 5)
+    df, data = load_candles(cfg, symbol, tf, args.candles + lookback + pred_len + extra, args.csv)
+    if end is not None:
+        df = df[df["timestamps"] <= end].reset_index(drop=True)
+        log.info("%s: periode diuji berakhir %s (%d candle tersedia sebelum tanggal itu).", symbol, end, len(df))
     if len(df) < lookback + 60:
         raise SystemExit(f"Data {symbol} terlalu sedikit ({len(df)} candle). Untuk forex 15/30 menit, Yahoo hanya "
                          "menyediakan sekitar 60 hari; kurangi jumlah candle atau pakai timeframe lebih besar.")
@@ -562,12 +576,12 @@ def run_symbol(symbol, full, args, log, prog, forecaster_box):
     segs = make_segments(start, end, folds)
     segs_cur = seg_eval(df, signals, cfg, symbol, run_s, segs, tf)
     mc = monte_carlo(trades, bal)
-    tag = "_dummy" if args.dummy else ""
-    info = {"speed": speed, "candles": end - start, "every": args.every, "folds": folds,
+    tag = ("_" + args.end.replace("-", "")[:8] if args.end else "") + ("_dummy" if args.dummy else "")
+    info = {"end": args.end,"speed": speed, "candles": end - start, "every": args.every, "folds": folds,
             "model": {k: full["model"].get(k) for k in ("name", "n_paths", "pred_len", "lookback")},
             "period": [str(df["timestamps"].iloc[start])[:16], str(df["timestamps"].iloc[-1])[:16]]}
     report(symbol, tf, trades, curve, bal, quality, log, tag, extra, segs_cur, mc, info)
-    if not args.dummy and quality["n"]:
+    if not args.dummy and quality["n"] and not args.end:
         from bot.store import Store
         Store(path_in_root(cfg["db_path"]), cfg["mode"], venue).set_backtest_accuracy(
             symbol, tf, pred_len, quality["hits"], quality["n"])
@@ -586,6 +600,7 @@ def main():
     ap.add_argument("--device", default=None, help="auto | gpu | cpu")
     ap.add_argument("--batch", type=int, default=0, help="titik waktu yang diramal sekaligus (0 = otomatis)")
     ap.add_argument("--folds", type=int, default=0, help="jumlah segmen waktu (0 = otomatis)")
+    ap.add_argument("--end", default=None, help="uji periode yang berakhir di tanggal ini (YYYY-MM-DD), bukan sekarang")
     ap.add_argument("--dummy", action="store_true")
     ap.add_argument("--config", default=None)
     args = ap.parse_args()
