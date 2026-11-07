@@ -49,9 +49,12 @@ class Store:
     def _migrate(self):
         """Tambah kolom baru ke database lama tanpa menghapus data."""
         want = {
-            "positions": {"sl": "REAL", "tp": "REAL", "peak": "REAL"},
+            "positions": {"sl": "REAL", "tp": "REAL", "peak": "REAL", "side": "TEXT", "venue": "TEXT",
+                          "lots": "REAL"},
             "signals": {"path_lo": "TEXT", "path_hi": "TEXT", "trend_up": "INTEGER", "rsi": "REAL",
-                        "atr_pct": "REAL", "rr": "REAL", "score": "REAL", "direction": "TEXT"},
+                        "atr_pct": "REAL", "rr": "REAL", "score": "REAL", "direction": "TEXT",
+                        "prob_down": "REAL", "trend_down": "INTEGER", "rr_short": "REAL", "venue": "TEXT",
+                        "tf": "TEXT", "horizon": "INTEGER", "eval_ret_pct": "REAL", "hit": "INTEGER"},
         }
         for table, cols in want.items():
             have = {r[1] for r in self.db.execute(f"PRAGMA table_info({table})")}
@@ -77,12 +80,13 @@ class Store:
             args.append(symbol)
         return [dict(r) for r in self.db.execute(q, args)]
 
-    def add_position(self, symbol, fill, candle_ts, reason, sl=None, tp=None):
+    def add_position(self, symbol, fill, candle_ts, reason, sl=None, tp=None, side="long", venue="crypto"):
         self.db.execute(
             "INSERT INTO positions(mode,symbol,status,entry_time,entry_price,amount,cost,entry_fee,"
-            "entry_candle_ts,entry_reason,order_id_buy,sl,tp,peak) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "entry_candle_ts,entry_reason,order_id_buy,sl,tp,peak,side,venue,lots)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (self.mode, symbol, "open", now_wib(), fill.price, fill.amount, fill.cost, fill.fee,
-             int(candle_ts), reason, fill.order_id, sl, tp, fill.price))
+             int(candle_ts), reason, fill.order_id, sl, tp, fill.price, side, venue, fill.lots))
         self.db.commit()
 
     def update_stops(self, pos_id, sl, tp, peak):
@@ -91,12 +95,12 @@ class Store:
 
     def close_position(self, pos_id, fill, reason):
         pos = dict(self.db.execute("SELECT * FROM positions WHERE id=?", (pos_id,)).fetchone())
-        pnl = fill.proceeds - pos["cost"]
+        pnl = fill.pnl if fill.pnl is not None else fill.proceeds - pos["cost"]
+        pct = fill.pnl_pct if fill.pnl_pct is not None else (pnl / pos["cost"] * 100 if pos["cost"] else 0)
         self.db.execute(
             "UPDATE positions SET status='closed', exit_time=?, exit_price=?, proceeds=?, exit_fee=?,"
             " exit_reason=?, order_id_sell=?, pnl=?, pnl_pct=? WHERE id=?",
-            (now_wib(), fill.price, fill.proceeds, fill.fee, reason, fill.order_id,
-             pnl, pnl / pos["cost"] * 100 if pos["cost"] else 0, pos_id))
+            (now_wib(), fill.price, fill.proceeds, fill.fee, reason, fill.order_id, pnl, pct, pos_id))
         self.db.commit()
         return pnl
 
@@ -112,16 +116,66 @@ class Store:
         return float(r["s"])
 
     # ---------- signals / equity / events ----------
-    def add_signal(self, sig, action, reason):
+    def add_signal(self, sig, action, reason, venue="crypto", tf=""):
         self.db.execute(
             "INSERT INTO signals(mode,created,candle_time,symbol,last_close,exp_ret_pct,median_ret_pct,"
-            "prob_up,pred_high,pred_low,action,reason,path,path_lo,path_hi,trend_up,rsi,atr_pct,rr,score,direction)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "prob_up,pred_high,pred_low,action,reason,path,path_lo,path_hi,trend_up,rsi,atr_pct,rr,score,direction,"
+            "prob_down,trend_down,rr_short,venue,tf,horizon)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (self.mode, now_wib(), sig.time, sig.symbol, sig.last_close, sig.exp_ret_pct,
              sig.median_ret_pct, sig.prob_up, sig.pred_high, sig.pred_low, action, reason,
              json.dumps(sig.path), json.dumps(sig.path_lo), json.dumps(sig.path_hi), int(sig.trend_up),
-             sig.rsi, sig.atr_pct, sig.rr, sig.score, sig.direction))
+             sig.rsi, sig.atr_pct, sig.rr, sig.score, sig.direction,
+             sig.prob_down, int(sig.trend_down), sig.rr_short, venue, tf, sig.horizon))
         self.db.commit()
+
+    # ---------- rapor akurasi ----------
+    def evaluate_signals(self, symbol, tf, hist):
+        """Nilai ramalan lama yang horizonnya sudah lewat: apakah arah ramalannya benar?"""
+        rows = self.db.execute(
+            "SELECT id, candle_time, last_close, exp_ret_pct, horizon FROM signals "
+            "WHERE symbol=? AND tf=? AND hit IS NULL AND horizon > 0", (symbol, tf)).fetchall()
+        if not rows:
+            return 0
+        times = [str(t) for t in hist["timestamps"]]
+        idx = {t: i for i, t in enumerate(times)}
+        closes = hist["close"].to_numpy(float)
+        first = times[0] if times else ""
+        n = 0
+        for r in rows:
+            i = idx.get(str(r["candle_time"]))
+            if i is None:
+                if str(r["candle_time"]) < first:
+                    self.db.execute("UPDATE signals SET hit=-1 WHERE id=?", (r["id"],))
+                continue
+            j = i + int(r["horizon"])
+            if j >= len(closes):
+                continue
+            actual = (closes[j] / r["last_close"] - 1) * 100
+            hit = -1 if r["exp_ret_pct"] == 0 or actual == 0 else int((actual > 0) == (r["exp_ret_pct"] > 0))
+            self.db.execute("UPDATE signals SET eval_ret_pct=?, hit=? WHERE id=?", (actual, hit, r["id"]))
+            n += 1
+        self.db.commit()
+        return n
+
+    def set_backtest_accuracy(self, symbol, tf, horizon, hits, n):
+        self.set_kv(f"acc_bt:{symbol}:{tf}", {"hits": int(hits), "n": int(n), "horizon": int(horizon),
+                                              "at": now_wib()})
+
+    def accuracy(self, symbol, tf, horizon, last=80) -> dict:
+        """Akurasi arah: gabungan ramalan robot yang sudah dinilai + hasil uji strategi."""
+        rows = self.db.execute(
+            "SELECT hit FROM (SELECT candle_time, MAX(id) id, hit FROM signals WHERE symbol=? AND tf=? AND horizon=? "
+            "AND hit IN (0,1) GROUP BY candle_time) ORDER BY id DESC LIMIT ?", (symbol, tf, int(horizon), last)).fetchall()
+        live_n = len(rows)
+        live_hits = sum(r["hit"] for r in rows)
+        bt = self.get_kv(f"acc_bt:{symbol}:{tf}") or {}
+        bt_n = int(bt.get("n", 0)) if int(bt.get("horizon", -1)) == int(horizon) else 0
+        bt_hits = int(bt.get("hits", 0)) if bt_n else 0
+        n = live_n + bt_n
+        return {"hit": (live_hits + bt_hits) / n if n else None, "n": n, "live_n": live_n,
+                "live_hit": live_hits / live_n if live_n else None, "bt_n": bt_n,
+                "bt_hit": bt_hits / bt_n if bt_n else None, "bt_at": bt.get("at") if bt_n else None}
 
     def add_equity(self, cash, pos_value):
         self.db.execute("INSERT INTO equity(mode,time,cash,positions_value,equity) VALUES(?,?,?,?,?)",

@@ -11,3 +11,4 @@ python-dotenv
 fastapi>=0.110
 uvicorn>=0.29
 psutil
+yfinance>=0.2.40

@@ -31,21 +31,29 @@ class Signal:
     atr_pct: float = 0.0      # volatilitas rata-rata per candle (%)
     upside_pct: float = 0.0   # potensi naik (median harga tertinggi)
     downside_pct: float = 0.0  # potensi turun (median harga terendah)
-    rr: float = 0.0           # rasio potensi naik : potensi turun
-    score: float = 0.0        # kekuatan sinyal = ekspektasi x peluang naik
+    rr: float = 0.0           # potensi naik : potensi turun (untuk buy)
+    score: float = 0.0        # kekuatan sinyal naik = ekspektasi x peluang naik
+    prob_down: float = 0.0    # porsi skenario yang berakhir di bawah harga - biaya
+    trend_down: bool = False
+    rr_short: float = 0.0     # potensi turun : potensi naik (untuk sell)
+    horizon: int = 0          # jumlah candle yang diramal
+    accuracy: float | None = None  # akurasi arah ramalan di pasar ini (0..1)
+    acc_n: int = 0            # jumlah ramalan yang sudah dinilai
 
     @property
     def direction(self) -> str:
-        if self.exp_ret_pct > 0.3 and self.prob_up >= 0.55:
+        thr = max(0.02, 0.3 * self.atr_pct)
+        if self.exp_ret_pct > thr and self.prob_up >= 0.55:
             return "NAIK"
-        if self.exp_ret_pct < -0.3 and self.prob_up <= 0.45:
+        if self.exp_ret_pct < -thr and self.prob_down >= 0.55:
             return "TURUN"
         return "SAMPING"
 
     def summary(self) -> str:
-        return (f"{self.symbol} close={self.last_close:,.6g} | ramalan {self.direction} {self.exp_ret_pct:+.2f}% "
-                f"| peluang naik {self.prob_up:.0%} | R:R {self.rr:.1f} | tren {'naik' if self.trend_up else 'turun'} "
-                f"| RSI {self.rsi:.0f}")
+        acc = f"akurasi {self.accuracy:.0%}/{self.acc_n}" if self.accuracy is not None else "akurasi -"
+        return (f"{self.symbol} {self.last_close:,.6g} | {self.direction} {self.exp_ret_pct:+.2f}% "
+                f"| naik {self.prob_up:.0%} turun {self.prob_down:.0%} | R:R {self.rr:.1f}/{self.rr_short:.1f} "
+                f"| RSI {self.rsi:.0f} | {acc}")
 
 
 class KronosForecaster:
@@ -116,22 +124,23 @@ def build_signal(symbol: str, hist: pd.DataFrame, paths: np.ndarray, fee_pct: fl
     last = float(hist["close"].iloc[-1])
     final = paths[:, -1, 3]
     rets = final / last - 1
-    hurdle = 2 * fee_pct / 100  # harus naik melebihi biaya beli + jual
+    hurdle = 2 * fee_pct / 100  # harus bergerak melebihi biaya buka + tutup
     hi = float(np.median(paths[:, :, 1].max(axis=1)))
     lo = float(np.median(paths[:, :, 2].min(axis=1)))
     up = max(0.0, (hi / last - 1) * 100)
-    down = max(1e-6, (1 - lo / last) * 100)
+    down = max(0.0, (1 - lo / last) * 100)
     exp_ret = float(rets.mean() * 100)
-    prob = float((rets > hurdle).mean())
     snap = snapshot(hist, trend_period)
     closes = paths[:, :, 3]
     return Signal(
         time=str(hist["timestamps"].iloc[-1]), symbol=symbol, last_close=last,
-        exp_ret_pct=exp_ret, median_ret_pct=float(np.median(rets) * 100), prob_up=prob,
+        exp_ret_pct=exp_ret, median_ret_pct=float(np.median(rets) * 100),
+        prob_up=float((rets > hurdle).mean()), prob_down=float((rets < -hurdle).mean()),
         pred_high=hi, pred_low=lo,
         path=[float(v) for v in np.median(closes, axis=0)],
         path_lo=[float(v) for v in np.percentile(closes, 10, axis=0)],
         path_hi=[float(v) for v in np.percentile(closes, 90, axis=0)],
-        trend_up=snap["trend_up"], rsi=snap["rsi"], atr_pct=snap["atr_pct"],
-        upside_pct=up, downside_pct=down, rr=up / down, score=exp_ret * prob,
+        trend_up=snap["trend_up"], trend_down=snap["trend_down"], rsi=snap["rsi"], atr_pct=snap["atr_pct"],
+        upside_pct=up, downside_pct=down, rr=up / max(down, 1e-6), rr_short=down / max(up, 1e-6),
+        score=exp_ret * float((rets > hurdle).mean()), horizon=int(paths.shape[1]),
     )

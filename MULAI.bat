@@ -22,9 +22,10 @@ echo Persiapan selesai.
 :run
 call .venv\Scripts\activate.bat
 fc /b requirements.txt .venv\req_installed.txt >nul 2>nul || (echo Memperbarui library untuk versi baru... & pip install -r requirements.txt && copy /y requirements.txt .venv\req_installed.txt >nul)
+pip show MetaTrader5 >nul 2>nul || pip install MetaTrader5 >nul 2>nul || echo (Library MetaTrader 5 tidak terpasang. Forex tetap bisa lewat data Yahoo Finance.)
 echo.
 echo ==========================================================
-echo   Panel Kontrol terbuka di browser: http://localhost:8501
+echo   Panel robot terbuka di browser: http://localhost:8501
 echo   Biarkan jendela ini terbuka selama memakai panel.
 echo ==========================================================
 python server.py

@@ -29,7 +29,9 @@ def snapshot(df: pd.DataFrame, trend_period: int = 200) -> dict:
     e_fast = ema(c, max(5, tp // 4))
     last = float(c.iloc[-1])
     slope_up = bool(e_slow.iloc[-1] > e_slow.iloc[-min(6, len(df))])
+    slope_down = bool(e_slow.iloc[-1] < e_slow.iloc[-min(6, len(df))])
     return {
+        "trend_down": bool(last < e_slow.iloc[-1] and slope_down),
         "ema_fast": float(e_fast.iloc[-1]),
         "ema_slow": float(e_slow.iloc[-1]),
         "trend_up": bool(last > e_slow.iloc[-1] and slope_up),

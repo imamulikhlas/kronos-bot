@@ -1,65 +1,74 @@
-# 🤖 Robot Trading Kronos (Tokocrypto)
+# kronos — robot trading kripto & forex
 
-Robot ini membeli dan menjual crypto **otomatis** di Tokocrypto berdasarkan ramalan AI Kronos.
-Semua diatur dari **Panel Kontrol** di browser. Tidak perlu mengetik perintah apa pun.
+Robot ini meramal arah harga pakai AI **Kronos**, lalu buka dan tutup posisi sendiri.
 
-## Cara memakai
+- **Kripto** lewat Tokocrypto. Spot, jadi cuma bisa buy.
+- **Forex & emas** lewat MetaTrader 5. Bisa buy dan sell.
 
-**Langkah 1 — Install Python (sekali saja)**
-Unduh Python 3.11 dari https://www.python.org/downloads/.
-Saat instalasi di Windows, **centang "Add python.exe to PATH"**.
+Semuanya diatur dari panel di browser, tanpa ngetik perintah.
 
-**Langkah 2 — Buka Panel Kontrol**
-- Windows: klik dua kali **`MULAI.bat`**
-- Mac: klik kanan **`mulai.command`** → Open
+> Ini alat eksperimen dan bisa rugi. Mulai dari mode **simulasi** (uang virtual, harga asli),
+> dan kalau mau live, pakai modal kecil yang siap hilang. Ini bukan nasihat keuangan.
 
-Pertama kali akan ada persiapan otomatis selama 5–15 menit. Setelah itu, Panel Kontrol langsung terbuka di browser. Biarkan jendela hitamnya tetap terbuka.
+## Cara pakai
 
-**Langkah 3 — Atur dan nyalakan**
-1. Menu **Pengaturan**: pilih koin, modal per posisi, maksimal posisi, stop-loss, take-profit, lalu **Simpan**.
-2. Menu **Beranda**: klik **Nyalakan robot**.
+1. **Install Python 3.11** dari https://www.python.org/downloads/. Di Windows, centang **"Add python.exe to PATH"**.
+2. **Buka panel.**
+   - Windows: klik dua kali **`MULAI.bat`**.
+   - Mac: klik kanan **`mulai.command`** → Open.
 
-Robot mulai di mode **Simulasi** (uang virtual, harga asli). Pertama kali menyala, robot mengunduh model AI, jadi tunggu beberapa menit.
+   Pertama kali ada persiapan otomatis 5–15 menit. Setelah itu panel kebuka sendiri di `http://localhost:8501`. Jendela hitamnya jangan ditutup.
+3. **Ikuti 3 langkah di beranda:**
+   1. Pilih pasar.
+   2. Uji dulu.
+   3. Nyalain robot.
 
-**Langkah 4 — Pakai uang sungguhan (setelah simulasi meyakinkan)**
-Menu **Akun & mode** → isi API key Tokocrypto → **Tes koneksi akun** → pilih **Live** → ketik konfirmasi.
+## Isi panel
 
-## Isi Panel Kontrol
-
-| Menu | Fungsi |
+| Menu | Buat apa |
 |---|---|
-| Beranda | Nyalakan/matikan robot, hitung mundur ke ramalan berikutnya, total aset & untung/rugi, posisi terbuka dengan batas jual + tombol **Jual** / **Jual semua**, **Jeda beli baru**, keputusan terakhir per koin, aktivitas |
-| Analisa | Grafik candlestick live + **kerucut ramalan AI** (perkiraan tengah dan rentang 10–90%), EMA, RSI, volume; arah prediksi dengan peluang naik, potensi untung:rugi, tren; apa yang akan dilakukan robot; **Ramal sekarang** dan **Pindai banyak koin** |
-| Pengaturan | Koin, timeframe, modal per posisi, **maksimal posisi terbuka**, batas rugi harian, stop-loss, take-profit, seberapa yakin sebelum membeli, filter tren, batas RSI, rasio untung:rugi, stop-loss otomatis (ATR), **trailing stop**, ukuran model AI |
-| Akun & mode | API key, tes koneksi, pindah Simulasi ↔ Live, reset simulasi |
-| Riwayat | Grafik aset, semua trade, grafik ramalan AI |
-| Uji strategi | Coba pengaturan Anda di data masa lalu + **optimasi otomatis**: mencari setelan terbaik lalu mengujinya di periode yang belum dilihat; pakai hasilnya dengan satu klik |
+| beranda | Saklar nyala/mati robot, total aset, cuan hari ini, posisi terbuka (stop-loss, target, tombol tutup), keputusan terakhir robot, **rapor akurasi**, aktivitas |
+| analisa | Grafik live dan ramalan AI ke depan beserta batas atas-bawahnya, arah (naik/turun/datar), peluang naik vs turun, dan apa yang bakal dilakukan robot. Ada juga fitur bandingin banyak pasar sekaligus |
+| riwayat | Semua trade yang sudah ditutup dan grafik aset |
+| uji | Uji setelan di data lama, plus optimasi otomatis yang dinilai di periode yang belum pernah dilihat. Setelan terbaik bisa dipakai dengan 1 klik |
+| setelan | Pasar, timeframe, modal, risiko forex per posisi, posisi maksimal, cara buka/tutup posisi (terpisah untuk kripto & forex), batas akurasi, ukuran model AI |
+| akun | Simulasi atau live, API key Tokocrypto, koneksi MetaTrader 5 |
 
-## Cara robot memutuskan
+Tombol bulan di pojok kanan atas buat ganti tema terang/gelap.
 
-Setiap candle tutup, robot meramal semua koin, lalu:
-1. **Mengurus posisi yang ada dulu.** Jual jika kena stop-loss, take-profit, atau trailing stop, sudah terlalu lama dipegang, atau ramalan berbalik turun.
-2. **Membeli mulai dari sinyal terkuat** (skor = perkiraan kenaikan × peluang naik). Robot hanya membeli jika semua syarat lolos:
-   - ramalan naik cukup besar
-   - peluang naik cukup tinggi
-   - tren sedang naik
-   - RSI belum jenuh beli
-   - potensi untung cukup besar dibanding potensi rugi
-   - slot posisi dan saldo masih ada
-3. **Menjaga posisi tiap menit.** Saat harga naik, trailing stop ikut naik untuk mengunci untung.
+## Forex lewat MetaTrader 5 (Windows)
+
+1. Bikin akun di broker forex yang pakai **MetaTrader 5**. Mulai dari **akun demo gratis** dulu.
+2. Install aplikasi MT5 dari broker itu, login, lalu nyalain tombol **Algo Trading** sampai hijau.
+3. Di panel, buka **akun → MetaTrader 5**. Centang "pakai MT5 buat forex", simpan, lalu klik **cek koneksi**.
+4. Pastikan nama simbol di panel sama dengan di Market Watch MT5. Beberapa broker pakai akhiran, misalnya `EURUSDm`. Ketik saja nama itu di kolom tambah pasar.
+
+Tanpa MT5 (misalnya di Mac), forex tetap bisa dianalisa, diuji, dan disimulasikan pakai data Yahoo Finance. Data Yahoo untuk timeframe 15 dan 30 menit cuma sekitar 60 hari ke belakang.
+
+Untuk forex, stop-loss dan target juga dipasang **di server broker**, jadi tetap aktif walau komputer mati. Trailing stop tetap butuh robot menyala.
+
+## Soal akurasi
+
+Robot mencatat **seberapa sering arah ramalannya benar** untuk tiap pasar, dari dua sumber: uji strategi, dan ramalan robot yang waktunya sudah lewat. Hasilnya tampil di **rapor akurasi** di beranda.
+
+Default-nya, robot tidak membuka posisi di pasar yang akurasinya di bawah 55% setelah 30 ramalan dinilai. Batas ini bisa diubah di **setelan → akurasi**, termasuk opsi "wajib terbukti dulu".
+
+Cara tercepat mengisi rapor: jalankan **uji** untuk tiap pasar yang kamu pilih.
+
+Ramalan tetap bisa salah. Akurasi 55–60% di arah harga itu sudah termasuk bagus. Yang menentukan untung atau rugi adalah gabungan akurasi, stop-loss/target, dan biaya.
 
 ## Penting
 
-- **Robot tetap berjalan walau tab browser ditutup.** Untuk menghentikannya, buka panel lalu klik **Matikan robot**.
-- **Komputer harus menyala dan tidak tidur (sleep).** Stop-loss dijalankan oleh robot. Jika komputer mati, posisi terbuka tidak terlindungi. Atur Windows: Settings → Power → Sleep: *Never*.
-- Saat membuat API key di Tokocrypto, aktifkan **baca + spot trading** saja. **Jangan aktifkan withdraw.**
-- Jangan trading manual di koin yang sama saat robot menyala.
-- Robot hanya membeli lalu menjual (spot). Tidak ada margin atau leverage.
-- Ini alat eksperimen dan bisa rugi. Mulai dari Simulasi, lalu Live dengan modal kecil.
+- **Robot tetap jalan walau tab browser ditutup.** Matikan lewat saklar di beranda.
+- **Komputer harus nyala dan tidak sleep.** Di Windows: Settings → Power → Sleep: *Never*.
+- API key Tokocrypto: aktifkan izin **baca + spot trading** saja, **jangan izin withdraw**.
+- Jangan trading manual di pasar yang sama saat robot menyala.
+- Kunci & password tersimpan di file `.env` di komputer kamu dan tidak pernah ikut ke GitHub.
 
-## Jika ada masalah
+## Kalau ada masalah
 
-- **Panel tidak terbuka:** buka browser lalu ketik `http://localhost:8501`. Panel hanya bisa dibuka dari komputer ini.
-- **Robot mati sendiri:** Beranda akan menampilkan pesan error-nya. Penyebab umum: internet putus, pair salah, atau API key ditolak.
-- **Ingin mengulang persiapan dari awal:** hapus folder `.venv`, lalu klik MULAI lagi.
+- **Panel nggak kebuka:** ketik `http://localhost:8501` di browser.
+- **Robot mati sendiri:** pesan error-nya muncul di beranda. Penyebab umum: internet putus, nama simbol salah, API key ditolak, atau MT5 belum login.
+- **MT5 nggak nyambung:** pastikan aplikasi MT5 terbuka, sudah login, dan Algo Trading hijau. Kalau terminalnya lebih dari satu, isi lokasi `terminal64.exe` di halaman akun.
+- **Mau ulang persiapan dari awal:** hapus folder `.venv`, lalu klik MULAI lagi.
 - Log lengkap ada di folder `logs/`.
